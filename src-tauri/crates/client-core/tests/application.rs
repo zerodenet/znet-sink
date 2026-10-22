@@ -420,3 +420,38 @@ fn observation_sources_cannot_masquerade_as_another_job_kind() {
         selected_tag: None,
     }));
 }
+
+#[test]
+fn lifecycle_generation_detects_unobserved_config_aba_without_treating_observations_as_transitions()
+{
+    let mut core =
+        znet_client_core::ClientCore::new(Some(ProfileId("A".into())), ConfigRevision(7));
+    let before = core.snapshot();
+    core.advance_snapshot();
+    assert!(core.snapshot().revision > before.revision);
+    assert_eq!(core.snapshot().scope_generation, before.scope_generation);
+    core.configuration_committed(Some(ProfileId("B".into())), ConfigRevision(8), 1);
+    core.configuration_committed(
+        before.scope.profile_id.clone(),
+        before.scope.config_revision,
+        2,
+    );
+    assert_eq!(core.snapshot().scope, before.scope);
+    assert_eq!(
+        core.snapshot().scope_generation.0,
+        before.scope_generation.0 + 2
+    );
+    core.core_instance_started(3);
+    let started = core.snapshot();
+    assert_eq!(started.scope_generation.0, before.scope_generation.0 + 3);
+    core.core_instance_lost(4);
+    assert_eq!(
+        core.snapshot().scope_generation.0,
+        started.scope_generation.0 + 1
+    );
+    core.core_instance_lost(5);
+    assert_eq!(
+        core.snapshot().scope_generation.0,
+        started.scope_generation.0 + 1
+    );
+}

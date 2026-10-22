@@ -19,6 +19,8 @@ class AppStateStore {
   appLoading = $state(true);
   loadError = $state<string | null>(null);
   uiMode = $state<UIMode>('lite');
+  /** Mobile navigation preserves the full management surface independently of desktop Lite. */
+  mobilePresentation = $state(false);
   isSwitchingUiMode = $state(false);
   activeTab = $state('overview');
   settingsSection = $state<SettingsSection>('general');
@@ -60,7 +62,7 @@ class AppStateStore {
     try {
       const [config, surface] = await Promise.all([
         getAppConfig(),
-        getGuiInteractionSurfaceSnapshot(),
+        getGuiInteractionSurfaceSnapshot(this.mobilePresentation ? 'mobile' : 'desktop'),
       ]);
 
       if (config.ui.theme && ['light', 'dark', 'system'].includes(config.ui.theme)) {
@@ -183,7 +185,7 @@ class AppStateStore {
     const generation = ++this.interactionSurfaceGeneration;
     try {
       console.time('[ZNet] refreshInteractionSurface');
-      const surface = await getGuiInteractionSurfaceSnapshot();
+      const surface = await getGuiInteractionSurfaceSnapshot(this.mobilePresentation ? 'mobile' : 'desktop');
       if (generation !== this.interactionSurfaceGeneration || (expectedMode && this.uiMode !== expectedMode)) {
         console.timeEnd('[ZNet] refreshInteractionSurface');
         return;
@@ -210,9 +212,10 @@ class AppStateStore {
     // Apply the local mode boundary synchronously. The cached interaction
     // surface still describes the previous mode until its background refresh
     // completes, which can take seconds when the core is busy.
-    if (this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;
+    if (!this.mobilePresentation && this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;
 
     const item = this.interactionSurface.navigation.get(key);
+    if (this.mobilePresentation) return true;
     if (item) return item.visible;
     return this.getFallbackNavVisible(key);
   }

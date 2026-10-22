@@ -41,9 +41,7 @@ fn normalize_active_flag(items: &mut [ProxyConfigProfile]) {
         }
     }
 
-    if !items.is_empty() && active_index.is_none() {
-        items[0].active = true;
-    }
+    // No active profile is a durable user choice after confirmed stop/removal.
 }
 
 pub fn list(state: State<'_, AppState>) -> AppResult<Vec<ProxyConfigProfile>> {
@@ -170,6 +168,135 @@ pub async fn upsert_runtime(
     upsert_runtime_locked(app_handle.clone(), input).await
 }
 
+/// Ordinary active-source replacement with a durable confirmed-apply journal.
+/// Cases requiring an OS system-proxy retarget retain the existing transaction
+/// and compensation chain; they are not claimed as local-only recoverable.
+pub(crate) async fn upsert_ordinary_subscription_runtime(
+    app_handle: AppHandle,
+    input: ProxyConfigUpsert,
+    expected_source: &SubscriptionProfile,
+    next_source: SubscriptionProfile,
+) -> AppResult<(ProxyConfigProfile, Option<SubscriptionProfile>)> {
+    let state = app_handle.state::<AppState>();
+    let _operation = state.proxy_config_operation().lock().await;
+    crate::services::ordinary_subscription_recovery::require_sync_allowed(
+        state.inner(),
+        &expected_source.id,
+    )?;
+    let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
+    let (next, profile) = build_upsert_profiles(&previous, input.clone())?;
+    if profile.managed_source.is_some() || expected_source.managed_source.is_some() {
+        return Err(AppError::invalid_argument(
+            "普通订阅不能修改托管或受保护配置",
+        ));
+    }
+    let previous_active = previous.iter().find(|profile| profile.active);
+    let next_active = next.iter().find(|profile| profile.active);
+    let runtime_changed = previous_active.map(|item| (&item.id, &item.content))
+        != next_active.map(|item| (&item.id, &item.content));
+    let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    if !running || !runtime_changed {
+        let profile = upsert_runtime_locked(app_handle.clone(), input).await?;
+        return Ok((profile, None));
+    }
+    let active = next_active
+        .filter(|active| active.id == profile.id)
+        .ok_or_else(|| AppError::invalid_argument("普通订阅应用目标不是当前配置"))?;
+    let source = active
+        .content
+        .clone()
+        .ok_or_else(|| AppError::invalid_argument("普通订阅没有有效配置正文"))?;
+    let app = lock(state.app_config(), "app_config")?.clone();
+    let rules_fingerprint = crate::services::app_database::ordinary_recovery::fingerprint(&*lock(
+        state.rule_sets(),
+        "rule_set",
+    )?)?;
+    let effective = crate::services::rule_overlay::compose_effective_candidate_with_app(
+        state.inner(),
+        &source,
+        Some(&active.id),
+        &app,
+    )?
+    .config;
+    if !ordinary_local_recovery_has_no_proxy_retarget(state.inner(), &app, &source, &active.id)? {
+        let profile = upsert_runtime_locked(app_handle.clone(), input).await?;
+        return Ok((profile, None));
+    }
+    let options = ipc_options(state.inner())?;
+    ZeroAdapter::new()
+        .validate_config(effective.clone(), options.clone())
+        .await?;
+    let capture = crate::configuration::capture_apply::candidate_capture_parameters(
+        state.inner(),
+        &source,
+        Some(&active.id),
+    )?;
+    let record = crate::services::ordinary_subscription_recovery::prepare_locked(
+        state.inner(),
+        expected_source,
+        profile.clone(),
+        next_source,
+        &effective,
+        &capture,
+        &app,
+        &rules_fingerprint,
+    )?;
+    let record = crate::services::ordinary_subscription_recovery::mark_apply_pending_locked(
+        state.inner(),
+        record,
+    )?;
+    // A dispatched request or confirmation persistence failure leaves the
+    // durable barrier. Never compensate/replay this ordinary journal path.
+    let receipt = crate::configuration::capture_apply::apply_profile(
+        state.inner(),
+        &source,
+        Some(&active.id),
+        effective,
+        options,
+    )
+    .await?;
+    let confirmed = crate::services::ordinary_subscription_recovery::confirm_locked(
+        state.inner(),
+        &record,
+        &receipt,
+    )?;
+    let subscription = crate::services::ordinary_subscription_recovery::finish_confirmed_locked(
+        state.inner(),
+        confirmed,
+    )?;
+    Ok((profile, Some(subscription)))
+}
+
+fn ordinary_local_recovery_has_no_proxy_retarget(
+    state: &AppState,
+    app: &crate::models::app_config::AppConfig,
+    source: &Value,
+    profile: &str,
+) -> AppResult<bool> {
+    if !system_proxy_guard::is_enabled_by_guard()? {
+        return Ok(true);
+    }
+    let current = crate::configuration::preferences::proxy_settings(state)?;
+    let (resolved_app, resolved_source) =
+        crate::configuration::local_edits::resolve(app, Some(profile), source)?;
+    let (host, port) =
+        crate::configuration::preferences::endpoint_for(&resolved_app, &resolved_source)?;
+    let bypass =
+        if !resolved_app.overrides.bypass && resolved_source.pointer("/route/bypass").is_some() {
+            Vec::new()
+        } else {
+            resolved_app.local_proxy.bypass.clone()
+        };
+    if current != (host.clone(), port, bypass.clone()) {
+        return Ok(false);
+    }
+    let actual = crate::services::system_proxy::status_fresh()?;
+    Ok(actual.enabled
+        && actual.host == host
+        && actual.port == port
+        && crate::services::system_proxy::bypass_matches(&bypass)?)
+}
+
 pub(crate) async fn upsert_runtime_locked(
     app_handle: AppHandle,
     input: ProxyConfigUpsert,
@@ -247,16 +374,13 @@ impl ProfilePublication {
     }
 }
 
-async fn upsert_runtime_transition(
-    app_handle: AppHandle,
+/// Shared ownership projection for UI/runtime and OS job local publication.
+pub(super) fn prepare_owned_upsert(
+    previous: &[ProxyConfigProfile],
     input: ProxyConfigUpsert,
     managed_owner: Option<ManagedSubscriptionSource>,
-    publication: ProfilePublication,
-) -> AppResult<ProxyConfigProfile> {
-    let state = app_handle.state::<AppState>();
-    let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
-    let previous_active = previous.iter().find(|profile| profile.active).cloned();
-    let (mut next, mut profile) = build_upsert_profiles(&previous, input)?;
+) -> AppResult<(Vec<ProxyConfigProfile>, ProxyConfigProfile)> {
+    let (mut next, mut profile) = build_upsert_profiles(previous, input)?;
     let previous_target = previous.iter().find(|item| item.id == profile.id);
     match (
         &managed_owner,
@@ -293,6 +417,19 @@ async fn upsert_runtime_transition(
             .ok_or_else(|| AppError::internal("failed to prepare managed proxy config"))?;
         target.managed_source = Some(owner);
     }
+    Ok((next, profile))
+}
+
+async fn upsert_runtime_transition(
+    app_handle: AppHandle,
+    input: ProxyConfigUpsert,
+    managed_owner: Option<ManagedSubscriptionSource>,
+    publication: ProfilePublication,
+) -> AppResult<ProxyConfigProfile> {
+    let state = app_handle.state::<AppState>();
+    let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
+    let previous_active = previous.iter().find(|profile| profile.active).cloned();
+    let (next, profile) = prepare_owned_upsert(&previous, input, managed_owner)?;
     let next_active = next.iter().find(|item| item.active).cloned();
     let runtime_changed = previous_active
         .as_ref()
@@ -430,6 +567,9 @@ pub fn update_active_content(state: &AppState, content: Value) -> AppResult<()> 
 pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let id = normalize_required(id, "id")?;
     let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
+    if let Some(removed) = previous.iter().find(|profile| profile.id == id) {
+        legacy_removal_admission(removed, None)?;
+    }
     let mut next = previous.clone();
     next.retain(|profile| profile.id != id);
     if next.len() == previous.len() {
@@ -585,19 +725,24 @@ async fn remove_runtime_owned(
         }
         (None, None) => {}
     }
+    legacy_removal_admission(&removed, managed_owner.as_ref())?;
     if !removed.active {
         return remove(state.clone(), id);
     }
 
     let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
-    let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
+    let managed_proxy_enabled = if cfg!(any(target_os = "android", target_os = "ios")) {
+        false // This host owns no desktop proxy; this is not VPN state.
+    } else {
+        system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
+    };
     let Some(replacement) = replacement else {
         if running {
             stop_core(app_handle.clone()).await?;
         } else if managed_proxy_enabled {
             system_proxy_guard::disable_with_guard()?;
         }
-        if let Err(error) = remove(state.clone(), id) {
+        if let Err(error) = remove_with_replacement(state.clone(), id, None) {
             if running {
                 let _ = restart_core(app_handle.clone()).await;
             }
@@ -608,7 +753,7 @@ async fn remove_runtime_owned(
     };
 
     if !running {
-        remove(state.clone(), id)?;
+        remove_with_replacement(state.clone(), id, Some(&replacement.id))?;
         retarget_managed_system_proxy(state.inner())?;
         return Ok(());
     }
@@ -637,7 +782,9 @@ async fn remove_runtime_owned(
     .await
     {
         Ok(receipt) => {
-            if let Err(mut error) = remove(state.clone(), id) {
+            if let Err(mut error) =
+                remove_with_replacement(state.clone(), id, Some(&replacement.id))
+            {
                 append_recovery(&mut error, "runtime", receipt.restore(state.inner()).await);
                 return Err(error);
             }
@@ -674,6 +821,60 @@ async fn remove_runtime_owned(
         }
         Err(error) => Err(error),
     }
+}
+
+fn legacy_removal_admission(
+    removed: &ProxyConfigProfile,
+    owner: Option<&ManagedSubscriptionSource>,
+) -> AppResult<()> {
+    if removed.active && owner.is_none() {
+        let mut error = AppError::invalid_argument(
+            "删除使用中的普通配置需要明确选择替代或停止；请从配置列表重新打开删除预检",
+        );
+        error.details = Some(
+            serde_json::json!({"requiredPreviewCommand":"profile_removal_preview","requiredCommitCommand":"profile_removal_commit"}),
+        );
+        return Err(error);
+    }
+    if removed.active && cfg!(any(target_os = "android", target_os = "ios")) {
+        return Err(AppError::invalid_argument(
+            "平台 VPN/服务状态未确认，不能删除使用中的托管配置；请通过来源管理重新核对",
+        ));
+    }
+    Ok(())
+}
+fn planned_removal(
+    previous: &[ProxyConfigProfile],
+    id: &str,
+    replacement: Option<&str>,
+) -> AppResult<Vec<ProxyConfigProfile>> {
+    let removed = previous
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| AppError::not_found("proxy_config", id))?;
+    if replacement.is_some_and(|r| r == id || !previous.iter().any(|p| p.id == r)) {
+        return Err(AppError::invalid_argument("删除计划中的替代配置无效"));
+    }
+    Ok(previous
+        .iter()
+        .filter(|p| p.id != id)
+        .cloned()
+        .map(|mut p| {
+            if removed.active {
+                p.active = replacement == Some(p.id.as_str());
+            }
+            p
+        })
+        .collect())
+}
+fn remove_with_replacement(
+    state: State<'_, AppState>,
+    id: String,
+    replacement: Option<&str>,
+) -> AppResult<()> {
+    let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
+    let next = planned_removal(&previous, &id, replacement)?;
+    persist_profile_transition(state.inner(), &previous, next)
 }
 
 fn append_recovery(error: &mut AppError, component: &str, recovery: AppResult<()>) {
@@ -769,11 +970,17 @@ fn local_proxy_endpoint(state: &AppState) -> AppResult<(String, u16, Vec<String>
 }
 
 pub(crate) fn retarget_managed_system_proxy(state: &AppState) -> AppResult<()> {
-    if !system_proxy_guard::is_enabled_by_guard()? {
-        return Ok(());
-    }
-    let (host, port, bypass) = local_proxy_endpoint(state)?;
-    system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)
+    znet_client_core::mobile::desktop_profile_effect(
+        cfg!(any(target_os = "android", target_os = "ios")),
+        || {
+            if !system_proxy_guard::is_enabled_by_guard()? {
+                return Ok(());
+            }
+            let (host, port, bypass) = local_proxy_endpoint(state)?;
+            system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)
+        },
+    )
+    .map(|_| ())
 }
 
 fn enable_managed_system_proxy(state: &AppState) -> AppResult<()> {
@@ -893,14 +1100,20 @@ fn extract_inbound_endpoint(inbound: &Value) -> Option<LocalProxyEndpoint> {
 }
 
 pub(crate) fn ensure_managed_system_proxy_compatible(content: Option<&Value>) -> AppResult<()> {
-    if system_proxy_guard::is_enabled_by_guard()?
-        && content.is_none_or(|v| v.get("inbounds").is_some() && extract_local_proxy(v).is_none())
-    {
-        return Err(AppError::invalid_argument(
-            "disable the GUI-managed system proxy before activating a config without a local proxy inbound",
-        ));
-    }
-    Ok(())
+    znet_client_core::mobile::desktop_profile_effect(
+        cfg!(any(target_os = "android", target_os = "ios")),
+        || {
+            if system_proxy_guard::is_enabled_by_guard()?
+                && content.is_none_or(|v| v.get("inbounds").is_some() && extract_local_proxy(v).is_none())
+            {
+                return Err(AppError::invalid_argument(
+                    "disable the GUI-managed system proxy before activating a config without a local proxy inbound",
+                ));
+            }
+            Ok(())
+        },
+    )
+    .map(|_| ())
 }
 
 fn has_non_empty_nested_array(config: &Value, paths: &[&[&str]]) -> bool {
@@ -971,6 +1184,26 @@ mod tests {
             content: Some(json!({ "updated": true })),
             active,
         }
+    }
+
+    #[test]
+    fn ordinary_active_legacy_remove_requires_fixed_preview() {
+        assert!(super::legacy_removal_admission(&profile("current", true), None).is_err());
+        assert!(super::legacy_removal_admission(&profile("inactive", false), None).is_ok());
+    }
+    #[test]
+    fn managed_deletion_publishes_exact_chosen_marker_and_stop_preserves_no_active() {
+        let previous = vec![
+            profile("current", true),
+            profile("first", false),
+            profile("chosen", false),
+        ];
+        let next = super::planned_removal(&previous, "current", Some("chosen")).unwrap();
+        assert_eq!(next.iter().find(|p| p.active).unwrap().id, "chosen");
+        let stopped = super::planned_removal(&previous, "current", None).unwrap();
+        assert!(stopped.iter().all(|p| !p.active));
+        let (edited, _) = build_upsert_profiles(&stopped, upsert("first", None)).unwrap();
+        assert!(edited.iter().all(|p| !p.active));
     }
 
     #[test]

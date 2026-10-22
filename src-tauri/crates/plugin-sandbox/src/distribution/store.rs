@@ -12,16 +12,23 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 const MAX_STORE: usize = 1024 * 1024;
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct State {
+    #[serde(default)]
+    epoch: u64,
+    #[serde(default)]
+    generations: BTreeMap<String, u64>,
     packages: BTreeMap<String, Installed>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Installed {
+    #[serde(default)]
+    generation: u64,
     current: StoredPackage,
     previous: Option<StoredPackage>,
 }
@@ -32,6 +39,35 @@ enum StoredPackage {
     Inline(String),
     /// Application packages and newly installed legacy packages are kept as exact binary blobs.
     Blob { sha256: String },
+}
+/// Exact verified installation, including cooperative store history. No source
+/// text is retained in an uninstall plan.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UninstallReview {
+    pub plugin_id: String,
+    pub store_digest: String,
+    pub store_epoch: u64,
+    pub installation_generation: u64,
+    pub package_digest: String,
+    pub current_sha256: String,
+    pub previous_sha256: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UninstallReceipt {
+    pub review: UninstallReview,
+    pub after_digest: String,
+    pub after_epoch: u64,
+    /// Immutable content-addressed blobs are deliberately retained. This is a
+    /// registration-removal receipt, never a physical-blob cleanup receipt.
+    pub blobs_retained: bool,
+}
+struct StoreLock(File);
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.0);
+    }
 }
 /// Atomic metadata plus content-addressed package blobs. Packages are verified
 /// directly from bytes and are never extracted into executable host paths.
@@ -45,7 +81,86 @@ impl Store {
         reject_symlink(&root)?;
         Ok(Self { root })
     }
-    fn lock(&self) -> Result<File> {
+    /// Open an existing store without creating business directories.
+    pub fn open_existing(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        reject_symlink(&root)?;
+        if !fs::metadata(&root)?.is_dir() {
+            return Err("invalid installation root".into());
+        }
+        Ok(Self { root })
+    }
+    pub fn review_uninstall(
+        &self,
+        registration: &Registration,
+    ) -> Result<(UninstallReview, VerifiedPackage)> {
+        let _lock = self.lock()?;
+        let state = self.read()?;
+        let installed = state
+            .packages
+            .get(&registration.id)
+            .ok_or("plugin is not installed")?;
+        let current = installed.current.read(&self.root)?;
+        let verified = verify(&current, registration)?;
+        let review = UninstallReview {
+            plugin_id: registration.id.clone(),
+            store_digest: sha256(&serde_json::to_vec(&state)?),
+            store_epoch: state.epoch,
+            installation_generation: installed.generation,
+            package_digest: verified.digest.clone(),
+            current_sha256: sha256(&current),
+            previous_sha256: installed
+                .previous
+                .as_ref()
+                .map(|p| p.read(&self.root).map(|b| sha256(&b)))
+                .transpose()?,
+        };
+        Ok((review, verified))
+    }
+    /// Caller has fixed a signed registration and original material. There is
+    /// no missing-row success and no second attempt after an uncertain result.
+    pub fn uninstall_checked(
+        &self,
+        registration: &Registration,
+        expected: &UninstallReview,
+    ) -> Result<UninstallReceipt> {
+        let _lock = self.lock()?;
+        let mut state = self.read()?;
+        let installed = state
+            .packages
+            .get(&registration.id)
+            .ok_or("plugin is not installed")?;
+        let current = installed.current.read(&self.root)?;
+        let verified = verify(&current, registration)?;
+        let actual = UninstallReview {
+            plugin_id: registration.id.clone(),
+            store_digest: sha256(&serde_json::to_vec(&state)?),
+            store_epoch: state.epoch,
+            installation_generation: installed.generation,
+            package_digest: verified.digest,
+            current_sha256: sha256(&current),
+            previous_sha256: installed
+                .previous
+                .as_ref()
+                .map(|p| p.read(&self.root).map(|b| sha256(&b)))
+                .transpose()?,
+        };
+        if &actual != expected {
+            return Err("installation changed after review".into());
+        }
+        let generation = installed.generation;
+        state.packages.remove(&registration.id);
+        advance_generation(&mut state, &registration.id, generation)?;
+        self.save(&state)?;
+        let after = self.read()?;
+        Ok(UninstallReceipt {
+            review: actual,
+            after_digest: sha256(&serde_json::to_vec(&after)?),
+            after_epoch: after.epoch,
+            blobs_retained: true,
+        })
+    }
+    fn lock(&self) -> Result<StoreLock> {
         let path = self.root.join("install.lock");
         reject_symlink(&path)?;
         let file = OpenOptions::new()
@@ -54,12 +169,37 @@ impl Store {
             .read(true)
             .write(true)
             .open(path)?;
-        file.lock_exclusive()?;
-        Ok(file)
+        if !file.metadata()?.is_file() {
+            return Err("nonregular installation lock rejected".into());
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // fs2 reports Windows contention as ERROR_LOCK_VIOLATION, whose
+        // ErrorKind is not necessarily WouldBlock. Compare its documented
+        // platform error as well; unrelated IO errors still fail immediately.
+        let contended = fs2::lock_contended_error().raw_os_error();
+        loop {
+            match FileExt::try_lock_exclusive(&file) {
+                Ok(()) => return Ok(StoreLock(file)),
+                Err(error)
+                    if (error.kind() == std::io::ErrorKind::WouldBlock
+                        || (contended.is_some() && error.raw_os_error() == contended))
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(5))
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || (contended.is_some() && error.raw_os_error() == contended) =>
+                {
+                    return Err("installation store busy".into())
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
     fn read(&self) -> Result<State> {
         let path = self.root.join("installed.json");
-        reject_symlink(&path)?;
+        reject_regular_if_present(&path)?;
         let file = match File::open(path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(State::default()),
@@ -71,14 +211,34 @@ impl Store {
             return Err("installation store exceeds limit".into());
         }
         let state: State = serde_json::from_slice(&bytes)?;
-        if state.packages.len() > 16 {
+        if state.packages.len() > 16
+            || state.generations.len() > 4096
+            || state
+                .generations
+                .values()
+                .any(|generation| *generation == 0)
+            || state
+                .packages
+                .iter()
+                .any(|(id, p)| match state.generations.get(id) {
+                    Some(generation) => *generation == 0 || *generation != p.generation,
+                    None => p.generation != 0,
+                })
+        {
             return Err("too many installed packages".into());
         }
         Ok(state)
     }
     fn save(&self, state: &State) -> Result<()> {
-        let bytes = serde_json::to_vec(state)?;
-        if bytes.len() > MAX_STORE || state.packages.len() > 16 {
+        let mut value = serde_json::to_value(state)?;
+        value["epoch"] = serde_json::Value::from(
+            state
+                .epoch
+                .checked_add(1)
+                .ok_or("installation epoch exhausted")?,
+        );
+        let bytes = serde_json::to_vec(&value)?;
+        if bytes.len() > MAX_STORE || state.packages.len() > 16 || state.generations.len() > 4096 {
             return Err("installation capacity exceeded".into());
         }
         let mut temporary = tempfile::NamedTempFile::new_in(&self.root)?;
@@ -113,9 +273,15 @@ impl Store {
             None
         };
         let (current, created) = self.store_blob(bytes)?;
-        state
-            .packages
-            .insert(registration.id.clone(), Installed { current, previous });
+        let generation = advance_generation(&mut state, &registration.id, 0)?;
+        state.packages.insert(
+            registration.id.clone(),
+            Installed {
+                generation,
+                current,
+                previous,
+            },
+        );
         if let Err(error) = self.save(&state) {
             if created {
                 let _ = fs::remove_file(self.blob_path(&sha256(bytes))?);
@@ -141,9 +307,8 @@ impl Store {
     pub fn uninstall(&self, id: &str) -> Result<()> {
         let _lock = self.lock()?;
         let mut state = self.read()?;
-        if state.packages.remove(id).is_none() {
-            return Err("plugin is not installed".into());
-        }
+        let removed = state.packages.remove(id).ok_or("plugin is not installed")?;
+        advance_generation(&mut state, id, removed.generation)?;
         self.save(&state)?;
         self.cleanup_unreferenced_blobs(&state);
         Ok(())
@@ -165,6 +330,13 @@ impl Store {
         verified.compatible(target, host_version)?;
         let previous = entry.previous.take().unwrap();
         entry.previous = Some(std::mem::replace(&mut entry.current, previous));
+        let previous_generation = entry.generation;
+        let generation = advance_generation(&mut state, &registration.id, previous_generation)?;
+        state
+            .packages
+            .get_mut(&registration.id)
+            .ok_or("plugin is not installed")?
+            .generation = generation;
         self.save(&state)?;
         Ok(verified)
     }
@@ -242,6 +414,21 @@ impl Store {
     }
 }
 
+fn advance_generation(state: &mut State, id: &str, previous: u64) -> Result<u64> {
+    if !state.generations.contains_key(id) && state.generations.len() >= 4096 {
+        return Err("installation history capacity exceeded".into());
+    }
+    let next = state
+        .generations
+        .get(id)
+        .copied()
+        .unwrap_or(0)
+        .max(previous)
+        .checked_add(1)
+        .ok_or("installation generation exhausted")?;
+    state.generations.insert(id.into(), next);
+    Ok(next)
+}
 impl StoredPackage {
     fn digest(&self) -> Option<&str> {
         match self {
@@ -270,6 +457,7 @@ impl StoredPackage {
 }
 
 fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
+    reject_regular_if_present(path)?;
     let mut bytes = Vec::new();
     File::open(path)?
         .take((limit + 1) as u64)
@@ -289,6 +477,16 @@ fn validate_digest(value: &str) -> Result<()> {
         return Err("invalid package blob digest".into());
     }
     Ok(())
+}
+fn reject_regular_if_present(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(m) if !m.is_file() || m.file_type().is_symlink() => {
+            Err("nonregular installation file rejected".into())
+        }
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 fn reject_symlink(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {

@@ -77,16 +77,30 @@ pub(crate) fn install_foreground_delegate() {
 
 pub(crate) fn deliver_if_post(
     method: Method,
-    value: Value,
+    mut value: Value,
     deliver: impl FnOnce(&Value) -> AppResult<()>,
 ) -> AppResult<Value> {
     if method == Method::NotificationPost {
+        if !value.is_object() {
+            return Err(AppError::invalid_argument("通知回执格式无效"));
+        }
         deliver(&value)?;
+        value.as_object_mut().unwrap().insert(
+            "delivery".into(),
+            serde_json::json!({"accepted":true,"presentation":"unconfirmed"}),
+        );
     }
     Ok(value)
 }
 
 pub(crate) fn publish(app: &AppHandle, value: &Value) -> AppResult<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let status = crate::services::mobile_notifications::status(app, false)?;
+        if !status.enabled || status.permission != "granted" {
+            return Err(denied());
+        }
+    }
     // Show the in-app feedback as soon as the SDK call is authorized. OS
     // permission prompts may take longer, and a hidden window must not block
     // the independent system delivery attempt.
@@ -171,6 +185,33 @@ fn show_system(_app: &AppHandle, title: &str, body: &str) -> AppResult<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn show_system(app: &AppHandle, title: &str, body: &str) -> AppResult<()> {
+    use tauri::Manager;
+    use tauri_plugin_notification::{NotificationExt, PermissionState};
+    let state = app.state::<crate::state::app_state::AppState>();
+    if !crate::services::common::lock(state.app_config(), "app_config")?
+        .mobile_notifications_enabled
+    {
+        return Err(denied());
+    }
+    // A guest grant never requests or substitutes the system authorization.
+    if app
+        .notification()
+        .permission_state()
+        .map_err(|_| unavailable("系统通知状态未确认".into()))?
+        != PermissionState::Granted
+    {
+        return Err(denied());
+    }
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|_| unavailable("系统通知提交未确认".into()))
+}
+
 #[cfg(any(
     target_os = "windows",
     target_os = "linux",
@@ -238,7 +279,12 @@ mod tests {
             delivered += 1;
             Ok(())
         });
-        assert_eq!(result.unwrap(), value);
+        let receipt = result.unwrap();
+        assert_eq!(receipt["message"], value["message"]);
+        assert_eq!(
+            receipt["delivery"],
+            serde_json::json!({"accepted":true,"presentation":"unconfirmed"})
+        );
         assert_eq!(delivered, 1);
 
         deliver_if_post(Method::LogWrite, value.clone(), |_| {

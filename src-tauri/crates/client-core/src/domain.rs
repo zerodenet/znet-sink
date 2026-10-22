@@ -21,7 +21,37 @@ macro_rules! numeric_id {
 }
 
 numeric_id!(SnapshotRevision);
-numeric_id!(ConfigRevision);
+/// Config identities include a full u64 content digest. Preserve them through
+/// JavaScript bridges; legacy numeric persistence remains readable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigRevision(pub u64);
+impl Serialize for ConfigRevision {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+impl<'de> Deserialize<'de> for ConfigRevision {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Decimal(String),
+            Legacy(u64),
+        }
+        match Wire::deserialize(deserializer)? {
+            Wire::Legacy(value) => Ok(Self(value)),
+            Wire::Decimal(value) => {
+                let parsed = value.parse::<u64>().map_err(serde::de::Error::custom)?;
+                if parsed.to_string() != value {
+                    return Err(serde::de::Error::custom(
+                        "configuration revision must be a canonical decimal u64",
+                    ));
+                }
+                Ok(Self(parsed))
+            }
+        }
+    }
+}
 numeric_id!(CoreInstanceId);
 numeric_id!(ProbeJobId);
 
@@ -247,6 +277,9 @@ pub struct NodeScreenSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct ClientCoreSnapshot {
     pub revision: SnapshotRevision,
+    /// Lifecycle/configuration generation, independent of observation updates.
+    #[serde(default)]
+    pub scope_generation: SnapshotRevision,
     pub scope: ClientScope,
     pub source_status: SourceStatus,
     pub active_probe_jobs: Vec<ProbeJobSnapshot>,

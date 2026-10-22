@@ -47,6 +47,22 @@ const config = await invoke('app_config_get');
 
 ## 文档索引
 
+- [移动客户端 v0.0.3 验证边界](../verification/mobile-client-v0.0.3.md)
+- [PR #46 合并范围、CI门槛与剩余风险](../verification/pr46-merge-readiness.md)
+- [移动运行与 core 接口交接](./mobile-platform-v0.0.3.md)
+- [端点统计定位与来源返回](./endpoint-statistics-navigation-v0.0.3.md)
+- [Packet 真实分页与关闭屏障](./packet-route-pagination-v0.0.3.md)
+- [工作区本地保存、草稿与来源保护](./config-workspace-local-v0.0.3.md)
+- [PRD V3 完成度与剩余客户端能力](./mobile-client-completion-matrix-v0.0.3.md)
+- [原生路由规则客户端覆盖编辑](./route-rule-editor-v0.0.3.md)
+- [规则集引用与 DNS 删除/重命名迁移](./reference-migrations-v0.0.3.md)
+- [概览定位与移动运行网络](./mobile-location-network-v0.0.3.md)
+- [移动版本目录前台到期检查](./mobile-release-foreground-v0.0.3.md)
+- [插件卸载的固定预览与逐项结果](./mobile-plugin-uninstall-v0.0.3.md)
+- [Flow 固定目标批量关闭](./flow-close-batch-v0.0.3.md)
+- [路由评估与独立 DNS 缓存](./route-cache-diagnostics-v0.0.3.md)
+- [普通配置无损文本编辑](./profile-editor-lossless-v0.0.3.md)
+
 - [网络工具箱架构与现有实现迁移计划（当前工作方向）](./internal-modules.md)
 - [流量拦截、抓包、HTTPS 调试与改写（目标边界）](./network-inspection.md)
 - [客户端统一入口、管理与执行管道（最新实施计划）](./unified-capability-plan.md)
@@ -71,3 +87,4 @@ const config = await invoke('app_config_get');
 - [Worktree Commit Plan](./worktree-commit-plan.md)
 
 - [客户端配置优先级](./config-precedence.md)：客户端设置覆盖来源配置及公共测速地址。
+- [Android Debug 安装与 USB 调试](./android-debug-usb-v0.0.3.md)：独立开发包、临时签名、WebView 条件和真实验收边界。

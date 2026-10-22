@@ -19,6 +19,15 @@ pub(super) struct Cache {
     _lock: File,
 }
 
+impl Drop for Cache {
+    fn drop(&mut self) {
+        // Closing this descriptor alone can leave the lock alive in a
+        // concurrently spawned child until exec. The download owner has now
+        // finished validation/consumption, so release its lock explicitly.
+        let _ = self._lock.unlock();
+    }
+}
+
 impl Cache {
     pub fn open(parent: &Path, url: &str, identity: &str) -> AppResult<Self> {
         fs::create_dir_all(parent).map_err(io_error)?;
@@ -126,4 +135,27 @@ fn prune(parent: &Path) {
 
 pub(super) fn io_error(error: std::io::Error) -> AppError {
     AppError::internal(format!("下载缓存读写失败（请检查磁盘空间和权限）：{error}"))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::Cache;
+
+    #[test]
+    fn dropping_cache_releases_lock_even_when_a_child_descriptor_is_still_open() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = Cache::open(root.path(), "http://local/release", "v1").unwrap();
+        // A concurrent process spawn can retain this open file description
+        // until exec closes CLOEXEC descriptors. Duplicate it to exercise that
+        // lifetime deterministically, without timing or a real fork.
+        let inherited = cache._lock.try_clone().unwrap();
+        assert!(Cache::open(root.path(), "http://local/release", "v1").is_err());
+        drop(cache);
+        let next = Cache::open(root.path(), "http://local/release", "v1").unwrap();
+        assert!(Cache::open(root.path(), "http://local/release", "v1").is_err());
+        drop(inherited);
+        assert!(Cache::open(root.path(), "http://local/release", "v1").is_err());
+        drop(next);
+        assert!(Cache::open(root.path(), "http://local/release", "v1").is_ok());
+    }
 }

@@ -13,6 +13,7 @@ export function scope(value:unknown):TrafficScope {
   if(v.kind==='inbound'||v.kind==='outbound')return {kind:v.kind,tag:text(v.tag)};
   if(v.kind==='endpoint')return {kind:v.kind,endpoint_id:text(v.endpoint_id)};
   if(v.kind==='peer')return {kind:v.kind,endpoint_id:text(v.endpoint_id),peer_id:text(v.peer_id)};
+  if(v.kind==='host_interface')return {kind:v.kind,name:text(v.name)};
   throw new Error('未知统计范围');
 }
 function counters(value:unknown):Record<string,U64|null> { return Object.fromEntries(Object.entries(object(value)).map(([k,v])=>[k,v==null?null:u64(v)])); }
@@ -21,7 +22,10 @@ export function snapshot(value:unknown):TrafficSnapshot {
   if(!Array.isArray(v.planes))throw new Error('统计平面缺失');
   const planes=v.planes.map(raw=>{const p=object(raw);return {plane:text(p.plane),accounting_basis:text(p.accounting_basis),source_roles:p.source_roles==null?[]:strings(p.source_roles),counters:counters(p.counters),available_metrics:strings(p.available_metrics),resettable_metrics:strings(p.resettable_metrics)};});
   if(new Set(planes.map(p=>p.plane)).size!==planes.length)throw new Error('重复统计平面');
-  return {scope:scope(v.scope),core_instance_id:text(v.core_instance_id),config_revision:u64(v.config_revision),generation:v.generation==null?null:u64(v.generation),stats_epoch:text(v.stats_epoch),epoch_started_at_unix_ms:u64(v.epoch_started_at_unix_ms),capture_started_at_unix_ms:u64(v.capture_started_at_unix_ms),sampled_at_monotonic_ns:u64(v.sampled_at_monotonic_ns),sampled_at_unix_ms:u64(v.sampled_at_unix_ms),planes,activity:counters(v.activity),reset_policy:text(v.reset_policy)};
+  const identity=scope(v.scope);
+  if(identity.kind==='host_interface' && (planes.length!==1 || planes[0].plane!=='host'))throw new Error('宿主网卡统计只能使用独立 Host 平面');
+  if(identity.kind!=='host_interface' && planes.some(p=>p.plane==='host'))throw new Error('Host 统计不能归属代理资源');
+  return {scope:identity,core_instance_id:text(v.core_instance_id),config_revision:u64(v.config_revision),generation:v.generation==null?null:u64(v.generation),stats_epoch:text(v.stats_epoch),epoch_started_at_unix_ms:u64(v.epoch_started_at_unix_ms),capture_started_at_unix_ms:u64(v.capture_started_at_unix_ms),sampled_at_monotonic_ns:u64(v.sampled_at_monotonic_ns),sampled_at_unix_ms:u64(v.sampled_at_unix_ms),source_sampled_at_monotonic_ns:v.source_sampled_at_monotonic_ns==null?null:u64(v.source_sampled_at_monotonic_ns),source_sampled_at_unix_ms:v.source_sampled_at_unix_ms==null?null:u64(v.source_sampled_at_unix_ms),planes,activity:counters(v.activity),reset_policy:text(v.reset_policy)};
 }
 function size(v:unknown):number {if(typeof v!=='number'||!Number.isSafeInteger(v)||v<0)throw new Error('无效分页游标');return v;}
 export function page(value:unknown):TrafficPage {

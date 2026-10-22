@@ -1,5 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import ProfileMaterials from '$lib/components/configuration/ProfileMaterials.svelte';
+  import SubscriptionSources from '$lib/components/configuration/SubscriptionSources.svelte';
+  import ProfileRemovalDialog from '$lib/components/mobile/ProfileRemovalDialog.svelte';
+  import DraggableModal from '$lib/components/DraggableModal.svelte';
   import { untrack } from 'svelte';
   import { Search, RefreshCw, Plus } from '@lucide/svelte';
   import { store } from '$lib/services/store.svelte';
@@ -8,11 +12,11 @@
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
   import { listConfigurations, type ConfigurationEntry } from '$lib/services/configuration-catalog';
   import { configurationKind, filterConfigurations, pluginLabel } from '$lib/features/configuration/catalog';
-  import { getProxyConfig, removeProxyConfig, setActiveProxyConfig, syncSubscription, syncAllSubscriptions,
+  import { setActiveProxyConfig, syncSubscription, syncAllSubscriptions,
     removeSubscription, getSubscriptionRemovalPreview } from '$lib/services/config';
   import { getAppErrorMessage } from '$lib/services/core';
   import * as toast from '$lib/services/toast.svelte';
-  import type { ProxyConfigProfile, SubscriptionProfile, SubscriptionRemovalPreview } from '$lib/types/domain';
+  import type { SubscriptionProfile, SubscriptionRemovalPreview } from '$lib/types/domain';
   import ConfigurationEditor from '$lib/components/configuration/ConfigurationEditor.svelte';
   import SubscriptionEditor from '$lib/components/configuration/SubscriptionEditor.svelte';
   import ConfigurationSource from '$lib/components/configuration/ConfigurationSource.svelte';
@@ -21,16 +25,17 @@
   import { Choice } from '$lib/components/ui/choice';
   import * as Segmented from '$lib/components/AppSegmentedControl';
   import * as Dialog from '$lib/components/ui/dialog';
+  let { mobile = false, locationTarget }: { mobile?: boolean; locationTarget?: import('$lib/features/mobile/location').MobileLocationTarget } = $props();
 
   let entries = $state<ConfigurationEntry[]>([]);
   let loading = $state(true); let loadError = $state(''); let operationError = $state('');
   let busyId = $state<string | null>(null); let query = $state(''); let kind = $state('all');
   let showCreate = $state(false); let showLocal = $state(false); let showSource = $state(false);
-  let editingProfile = $state<ProxyConfigProfile | null>(null); let editingSource = $state<SubscriptionProfile | null>(null);
+  let editingProfileId = $state<string | null>(null); let editingSource = $state<SubscriptionProfile | null>(null);
+  let managingSource = $state<string | null>(null); let removalOpen = $state(false);
   let localDelete = $state<ConfigurationEntry | null>(null);
   let sourceDelete = $state<SubscriptionProfile | null>(null);
   let preview = $state<SubscriptionRemovalPreview | null>(null); let removeConfig = $state(false);
-  let viewing = $state<ProxyConfigProfile | null>(null);
   const gate = createLatestRequestGate();
   const filtered = $derived(filterConfigurations(entries, kind, query));
   const busy = $derived(busyId !== null);
@@ -62,12 +67,7 @@
     try { await guiState.refreshNodeStateAfterConfigChange(); }
     catch { toast.warning('配置已保存，但节点状态刷新失败，请稍后刷新查看'); }
   }
-  function editLocal(entry?: ConfigurationEntry) {
-    if (entry?.profileId) void run(entry.id, async () => {
-      editingProfile = await getProxyConfig(entry.profileId!); showLocal = true;
-    });
-    else { editingProfile = null; showLocal = true; }
-  }
+  function editLocal(entry?: ConfigurationEntry) { editingProfileId = entry?.profileId ?? null; showLocal = true; }
   function update(source: SubscriptionProfile) {
     void run(source.id, async () => { await syncSubscription(source.id); toast.success('配置来源已更新'); });
   }
@@ -78,11 +78,10 @@
   function requestSourceRemoval(source: SubscriptionProfile) {
     void run(source.id, async () => { preview = await getSubscriptionRemovalPreview(source.id); sourceDelete = source; removeConfig = false; });
   }
-  function showContent(entry: ConfigurationEntry) {
-    if (entry.profileId) void run(entry.id, async () => { viewing = await getProxyConfig(entry.profileId!); });
-  }
+  function showContent(entry: ConfigurationEntry) { editLocal(entry); }
 </script>
 
+{#if mobile}<ProfileMaterials mobile {locationTarget} />{:else}
 <div class="profiles-root">
   <header class="toolbar">
     <div class="toolbar-top">
@@ -124,13 +123,13 @@
             {/if}
             {#if configurationKind(entry) === 'local'}
               {#if canEdit}<Button size="sm" variant="ghost" disabled={busy} onclick={() => editLocal(entry)}>编辑配置</Button>{/if}
-              {#if canRemove}<Button size="sm" variant="ghost" disabled={busy} onclick={() => localDelete = entry}>删除配置</Button>{/if}
+              {#if canRemove}<Button size="sm" variant="ghost" disabled={busy} onclick={() => { localDelete = entry; removalOpen = true; }}>删除配置</Button>{/if}
             {:else if !entry.sources.length && entry.managedSource}
               <span class="metadata">由 {pluginLabel(entry.managedSource.pluginId)} 托管</span><Button size="sm" variant="outline" onclick={() => store.openTab('plugins')}>前往来源插件</Button>
             {/if}
           </div>
           {#each entry.sources as source (source.id)}
-            <ConfigurationSource {source} {canRemove} busy={busy || !canEdit} onupdate={() => update(source)} onedit={() => { editingSource = source; showSource = true; }} onremove={() => requestSourceRemoval(source)} onplugin={() => store.openTab('plugins')} />
+            <ConfigurationSource {source} {canRemove} busy={busy || !canEdit} onupdate={() => update(source)} onedit={() => { editingSource = source; showSource = true; }} onremove={() => requestSourceRemoval(source)} onplugin={() => store.openTab('plugins')} onmanage={() => managingSource = source.id} />
           {/each}
         </article>
       {/each}
@@ -139,7 +138,7 @@
   </div>
 </div>
 
-{#if showLocal}<ConfigurationEditor profile={editingProfile} onsaved={saved} onclose={() => showLocal = false} />{/if}
+{#if showLocal}<ConfigurationEditor profileId={editingProfileId} onsaved={saved} onclose={() => showLocal = false} />{/if}
 {#if showSource}<SubscriptionEditor source={editingSource} onsaved={saved} onclose={() => showSource = false} />{/if}
 <Dialog.Root bind:open={showCreate}><Dialog.Content>
   <Dialog.Header><Dialog.Title>添加配置</Dialog.Title><Dialog.Description>选择配置来源，所有配置在同一个列表中管理。</Dialog.Description></Dialog.Header>
@@ -149,16 +148,12 @@
     <Button variant="outline" onclick={() => { showCreate = false; store.openTab('plugins'); }}>插件托管</Button>
   </Dialog.Body>
 </Dialog.Content></Dialog.Root>
-<Dialog.Root open={!!localDelete} onOpenChange={(value) => { if (!value && !busy) localDelete = null; }}><Dialog.Content>
-  <Dialog.Header><Dialog.Title>删除配置</Dialog.Title><Dialog.Description>删除「{localDelete?.name}」{localDelete?.active ? '，当前配置将由现有切换流程处理' : ''}。此操作不修改客户端全局设置。</Dialog.Description></Dialog.Header>
-  <Dialog.Footer><Button variant="outline" disabled={busy} onclick={() => localDelete = null}>取消</Button><Button variant="destructive" disabled={busy} onclick={() => {
-    if (localDelete?.profileId) void run(localDelete.id, async () => { await removeProxyConfig(localDelete!.profileId!); localDelete = null; await saved(); });
-  }}>确认删除</Button></Dialog.Footer>
-</Dialog.Content></Dialog.Root>
+<ProfileRemovalDialog targetId={localDelete?.profileId ?? null} bind:open={removalOpen} onremoved={async () => { localDelete = null; removalOpen = false; await saved(); }} />
 <Dialog.Root open={!!sourceDelete} onOpenChange={(value) => { if (!value && !busy) sourceDelete = null; }}><Dialog.Content>
   <Dialog.Header><Dialog.Title>移除订阅来源</Dialog.Title><Dialog.Description>默认保留已生成的配置、策略内容和客户端全局设置，仅停止此来源的后续更新。</Dialog.Description></Dialog.Header>
   <Dialog.Body>
-    {#if preview?.targetProxyConfig}<label class="flex gap-2"><Choice bind:checked={removeConfig} disabled={busy || preview.targetProxyConfig.sharedBySubscriptionCount > 0} />同时删除配置及此来源的托管规则集</label>
+    {#if preview?.targetProxyConfig}<label class="flex gap-2"><Choice bind:checked={removeConfig} disabled={busy || preview.targetProxyConfig.active || preview.targetProxyConfig.sharedBySubscriptionCount > 0} />同时删除配置及此来源的托管规则集</label>
+      {#if preview.targetProxyConfig.active}<p>配置正在使用，请先在配置删除预览中明确替代或停止；此处保留配置。</p>{/if}
       {#if preview.targetProxyConfig.sharedBySubscriptionCount > 0}<p>另有 {preview.targetProxyConfig.sharedBySubscriptionCount} 个来源使用此配置，配置将保留。</p>{/if}
     {/if}
     {#if operationError}<p role="alert" class="error">{operationError}</p>{/if}
@@ -167,11 +162,11 @@
     if (sourceDelete) void run(sourceDelete.id, async () => { await removeSubscription(sourceDelete!.id, removeConfig); sourceDelete = null; await saved(); });
   }}>确认移除</Button></Dialog.Footer>
 </Dialog.Content></Dialog.Root>
-<Dialog.Root open={!!viewing} onOpenChange={(value) => { if (!value) viewing = null; }}><Dialog.Content class="sm:max-w-2xl">
-  <Dialog.Header><Dialog.Title>{viewing?.name} · 来源内容</Dialog.Title><Dialog.Description>此处展示保存的配置内容。客户端全局覆盖后的最终配置可在设置的高级配置中查看。</Dialog.Description></Dialog.Header>
-  <Dialog.Body><pre class="raw-config">{JSON.stringify(viewing?.content, null, 2)}</pre></Dialog.Body>
-  <Dialog.Footer><Button variant="outline" onclick={() => { viewing = null; store.openSettings('config'); }}>查看最终生效配置</Button><Button onclick={() => viewing = null}>关闭</Button></Dialog.Footer>
-</Dialog.Content></Dialog.Root>
+<DraggableModal title="来源管理与结果核对" open={managingSource !== null} onClose={() => managingSource = null} width="min(780px, 94vw)">
+  {#if managingSource}<SubscriptionSources sourceId={managingSource} />{/if}
+</DraggableModal>
+{/if}
+
 <style>
   .profiles-root { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; border:1px solid var(--border); border-radius:14px; background:var(--card); overflow:hidden; }
   .toolbar { padding:20px; display:grid; gap:16px; border-bottom:1px solid var(--border); }
@@ -190,6 +185,5 @@
   .error { color:var(--destructive); font-size:12px; overflow-wrap:anywhere; margin-bottom:8px; }
   .empty { padding:40px 10px; color:var(--muted-foreground); text-align:center; }
   footer { padding-top:16px; color:var(--muted-foreground); font-size:12px; }
-  .raw-config { font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
   @media(max-width:500px) { .toolbar,.list-shell { padding:14px; } .toolbar-search { width:100%; flex-basis:100%; } }
 </style>

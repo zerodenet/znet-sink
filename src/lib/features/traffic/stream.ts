@@ -23,7 +23,7 @@ export class TrafficStream {
         this.sequences.set(payload.coreInstanceId, next);
         if (this.sequences.size > 4) this.sequences.delete(this.sequences.keys().next().value!);
       }
-      if (payload.eventType !== 'traffic.scopesSampled' && payload.eventType !== 'traffic.reset') return;
+      if (payload.eventType !== 'traffic.scopesSampled' && payload.eventType !== 'traffic.hostInterfacesSampled' && payload.eventType !== 'traffic.reset') return;
       if (payload.payload?.kind !== 'trafficObservation') throw new Error('统计事件载荷不兼容');
       const data = payload.eventType === 'traffic.reset' ? reset(payload.payload.data) : page(payload.payload.data);
       if (payload.coreInstanceId && payload.coreInstanceId !== data.core_instance_id) throw new Error('统计事件实例不匹配');

@@ -52,6 +52,7 @@ pub fn gui_event_type(source_event_type: &str) -> &'static str {
         "policy.probe.completed" => "policy.probeCompleted",
         "stats.sampled" => "traffic.sampled",
         "stats.scopes_sampled" => "traffic.scopesSampled",
+        "stats.host_interfaces_sampled" => "traffic.hostInterfacesSampled",
         "stats.reset" => "traffic.reset",
         // TUN virtual network interface
         "tun.started" | "tun.stopped" => "tun.statusChanged",
@@ -115,7 +116,7 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
                 unknown_payload("invalid policy.probe.completed event payload", payload)
             }),
         "stats.sampled" => GuiEventData::TrafficStats(parse_stats(payload)),
-        "stats.scopes_sampled" | "stats.reset" => {
+        "stats.scopes_sampled" | "stats.host_interfaces_sampled" | "stats.reset" => {
             GuiEventData::TrafficObservation(super::traffic::wire::exact(payload.clone()))
         }
         // TUN virtual network interface events

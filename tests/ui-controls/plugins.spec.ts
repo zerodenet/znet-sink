@@ -81,7 +81,7 @@ async function fixture(page: Page, discover = false, count = 1, configurable = f
           return state();
         }
         if (command === 'platform_open_url') { (window as any).__openedPluginUrl = args.url; return; }
-        if (command === 'app_config_get') return { tun: { enabled: false } };
+        if (command === 'app_config_get' || command === 'client_settings_get') return { tun: { enabled: false } };
         if (command === 'gui_tun_status') {
           calls.push({ command, args });
           return { enabled: false, healthy: false };
@@ -91,18 +91,20 @@ async function fixture(page: Page, discover = false, count = 1, configurable = f
           if (command === 'plugins_snapshot') snapshotCalls++;
           return state();
         }
-        if (command === 'plugins_page') {
+        if (command === 'plugins_page_check' || command === 'plugins_page_close') return;
+        if (command === 'plugins_page_document') {
           pageLoads++;
-          return `<!doctype html><html><body><main data-znet-layout="settings"><nav data-znet-settings-nav><div data-znet-nav-title>Connect</div><button data-znet-settings-item aria-current="step">来源</button></nav><section data-znet-settings-content><header data-znet-page-header><h1>Connect 管理</h1></header><div data-znet-panel><output id="config">正在读取配置</output><label data-znet-field><span>来源名称</span><input aria-label="来源名称" /></label><button id="login" data-variant="primary">登录并同步</button><button id="usage">更新用量</button><button id="usage-error">验证错误</button><output id="result"></output><output id="host-error"></output></div></section></main><script>(async()=>{const value=await znetPlugin.configuration.get('identity');document.getElementById('config').textContent='配置 '+value.path})().catch(error=>{document.getElementById('config').textContent=error.message});document.getElementById('login').onclick=async()=>{await znetPlugin.storage.putJson('identity','state','device/session',{credential:'remote-issued'});const value=await znetPlugin.invoke('identity','login',{account:'demo'});document.getElementById('result').textContent='订阅 '+value.subscriptions.length};document.getElementById('usage').onclick=async()=>{const value=await znetPlugin.subscriptions.updateMetadata('identity','https://example.com','1',{usedBytes:123,totalBytes:1000,expireAtUnixMs:1800000000000});document.getElementById('result').textContent='用量 '+value.usedBytes};document.getElementById('usage-error').onclick=async()=>{try{await znetPlugin.subscriptions.updateMetadata('identity','https://example.com','bad',{usedBytes:123,totalBytes:0,expireAtUnixMs:1800000000000})}catch(error){document.getElementById('host-error').textContent=JSON.stringify({code:error.code,message:error.message,fieldPath:error.fieldPath,diagnostics:error.diagnostics,retryAfterMs:error.retryAfterMs})}}</script></body></html>`;
+          const html = `<!doctype html><html><body><main data-znet-layout="settings"><nav data-znet-settings-nav><div data-znet-nav-title>Connect</div><button data-znet-settings-item aria-current="step">来源</button></nav><section data-znet-settings-content><header data-znet-page-header><h1>Connect 管理</h1></header><div data-znet-panel><output id="config">正在读取配置</output><label data-znet-field><span>来源名称</span><input aria-label="来源名称" /></label><button id="login" data-variant="primary">登录并同步</button><button id="usage">更新用量</button><button id="usage-error">验证错误</button><output id="result"></output><output id="host-error"></output></div></section></main><script>(async()=>{const value=await znetPlugin.configuration.get('identity');document.getElementById('config').textContent='配置 '+value.path})().catch(error=>{document.getElementById('config').textContent=error.message});document.getElementById('login').onclick=async()=>{await znetPlugin.storage.putJson('identity','state','device/session',{credential:'remote-issued'});const value=await znetPlugin.invoke('identity','login',{account:'demo'});document.getElementById('result').textContent='订阅 '+value.subscriptions.length};document.getElementById('usage').onclick=async()=>{const value=await znetPlugin.subscriptions.updateMetadata('identity','https://example.com','1',{usedBytes:123,totalBytes:1000,expireAtUnixMs:1800000000000});document.getElementById('result').textContent='用量 '+value.usedBytes};document.getElementById('usage-error').onclick=async()=>{try{await znetPlugin.subscriptions.updateMetadata('identity','https://example.com','bad',{usedBytes:123,totalBytes:0,expireAtUnixMs:1800000000000})}catch(error){document.getElementById('host-error').textContent=JSON.stringify({code:error.code,message:error.message,fieldPath:error.fieldPath,diagnostics:error.diagnostics,retryAfterMs:error.retryAfterMs})}}</script></body></html>`;
+          return {plugin_id:component.plugin_id,page_id:'manage',html,document_review:'signed-document',components:structuredClone(components)};
         }
-        if (command === 'plugins_storage_put' || command === 'plugins_invoke') {
-          if (args.pluginId !== component.plugin_id) throw new Error('插件身份越界');
+        if (command === 'plugins_storage_put' || command === 'plugins_invoke' || command === 'plugins_page_invoke') {
+          if ((args.pluginId ?? args.review?.key.split('/')[0]) !== component.plugin_id) throw new Error('插件身份越界');
           calls.push({ command, args: JSON.parse(JSON.stringify(args)) });
-          if (command === 'plugins_invoke') return { subscriptions: ['a', 'b'] };
+          if (command === 'plugins_invoke' || command === 'plugins_page_invoke') return { subscriptions: ['a', 'b'] };
           return;
         }
-        if (command === 'plugins_sdk_call') {
-          if (args.pluginId !== component.plugin_id || args.componentId !== component.component_id) throw new Error('插件身份越界');
+        if (command === 'plugins_sdk_call' || command === 'plugins_page_sdk_call') {
+          if ((args.pluginId ?? args.review?.key.split('/')[0]) !== component.plugin_id || (args.componentId ?? args.review?.key.split('/')[1]) !== component.component_id) throw new Error('插件身份越界');
           calls.push({ command, args: structuredClone(args) });
           if (args.call.method === 'storage_put' && args.call.request.capability === 'plugin.storage.write') {
             return { version: 1, ok: true, value: true };
@@ -142,6 +144,17 @@ async function fixture(page: Page, discover = false, count = 1, configurable = f
         }
         if (command === 'plugins_stop') { component.enabled = false; component.running = false; component.review.revision++; return state(); }
         if (command === 'plugins_revoke_permissions') { component.enabled = false; component.permissions.forEach(permission => { permission.granted = false; }); component.review.revision++; return state(); }
+        if (command === 'plugins_uninstall_preview') return {
+          planId:'fixture-uninstall-plan',pluginId:component.plugin_id,pluginName:component.name,version:component.version,packageDigest:'digest',publisherId:component.publisher,publisherFingerprint:'fingerprint',hostSessionId:'fixture-host',binding:'fixed-binding',expiresAtUnixMs:String(Date.now()+300000),canExecute:true,blockedReasons:[],activeProfile:null,replacementCandidates:[],requiresManualSwitch:false,requiresStop:false,
+          resources:[{resourceId:'package',kind:'plugin-package',name:'示例插件包',ownership:'verified-package',dependencies:[],protectedReason:null}],notice:'仅删除精确归属资源，物理规则缓存保留。'
+        };
+        if (command === 'plugins_uninstall_execute') {
+          if(args.planId!=='fixture-uninstall-plan'||args.confirmOwnedResources!==true||!/^[0-9a-f]{32}$/.test(args.operationId))throw {code:'plugin_uninstall_preflight_rejected'};
+          calls.push({command,args:structuredClone(args)});installed=false;
+          return {operationId:args.operationId,planId:args.planId,pluginId:component.plugin_id,pluginName:component.name,version:component.version,packageDigest:'digest',publisherFingerprint:'fingerprint',state:'completed',reason:null,startedAtUnixMs:'1788697000000',finishedAtUnixMs:'1788697000001',items:[{resourceId:'package',kind:'plugin-package',name:'示例插件包',state:'completed',reason:null}],canRetry:false,notice:'原操作逐项回执。'};
+        }
+        if (command === 'plugins_uninstall_discard') return;
+        if (command === 'plugins_uninstall_recent') return [];
         if (command === 'plugins_uninstall') { installed = false; return state(); }
         throw new Error(`Unexpected command: ${command}`);
       } },
@@ -174,6 +187,7 @@ test('permissions are explicit and unsupported access cannot be selected; stoppi
   await page.getByRole('radio', { name: '关于', exact: true }).click();
   await page.getByRole('button', { name: '卸载', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('托管的订阅、关联配置和规则');
+  await page.getByRole('dialog').getByRole('checkbox',{name:'确认仅清理以上固定归属资源',exact:true}).check();
   await page.getByRole('dialog').getByRole('button', { name: '卸载', exact: true }).click();
   await expect(page.getByText('插件已卸载', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__pluginFixture.calls.some((call: { command: string }) => call.command === 'gui_tun_status'))).toBe(true);
@@ -289,7 +303,7 @@ test('multiple components stay grouped under one installed plugin card', async (
 });
 
 test('a signed plugin management page owns its workflow through the bound host sdk', async ({ page }) => {
-  await fixture(page, false, 1, true, false, true, '1.0.0', false, 1, false, true);
+  await fixture(page, false, 1, true, false, true, '1.0.0', false, 1, false, true, {enabled:true});
   await openInstalledPlugin(page);
   await expect(page.locator('.plugin-detail-hero')).toHaveCount(0);
   const detailToolbar = page.locator('.plugin-detail-toolbar');
@@ -309,19 +323,19 @@ test('a signed plugin management page owns its workflow through the bound host s
   await frame.getByRole('button', { name: '登录并同步' }).click();
   await expect(frame.getByText('订阅 2', { exact: true })).toBeVisible();
   const calls = await page.evaluate(() => (window as any).__pluginFixture.calls);
-  expect(calls.map((call: any) => call.command)).toEqual(['plugins_sdk_call', 'plugins_invoke']);
-  expect(calls.every((call: any) => call.args.pluginId === 'org.example.plugin')).toBe(true);
+  expect(calls.map((call: any) => call.command)).toEqual(['plugins_page_sdk_call', 'plugins_page_invoke']);
+  expect(calls.every((call: any) => call.args.review.key === 'org.example.plugin/identity' && call.args.documentReview === 'signed-document')).toBe(true);
   await frame.getByRole('button', { name: '更新用量', exact: true }).click();
   await expect(frame.getByText('用量 123', { exact: true })).toBeVisible();
   await frame.getByRole('button', { name: '验证错误', exact: true }).click();
   await expect(frame.locator('#host-error')).toHaveText(JSON.stringify({
     code: 'invalid_request',
-    message: 'totalBytes 必须大于 0',
+    message: '参数无效，请核对输入与当前组件状态',
     fieldPath: 'usage.totalBytes',
-    diagnostics: ['服务端配额无效'],
+    diagnostics: [],
     retryAfterMs: 250,
   }));
-  const sdkCalls = await page.evaluate(() => (window as any).__pluginFixture.calls.filter((call: any) => call.command === 'plugins_sdk_call' && call.args.call.method === 'subscription_metadata_update'));
+  const sdkCalls = await page.evaluate(() => (window as any).__pluginFixture.calls.filter((call: any) => call.command === 'plugins_page_sdk_call' && call.args.call.method === 'subscription_metadata_update'));
   expect(sdkCalls).toHaveLength(2);
   expect(sdkCalls[0].args.call).toMatchObject({
     request: { capability: 'subscriptions.manage', scope: 'self' },

@@ -60,7 +60,7 @@ pub(crate) fn candidate(
         ));
     }
     let mut next = app.clone();
-    if matches!(action, Action::Restart {}) {
+    if matches!(action, Action::Restart {} | Action::ClearOverrides {}) {
         return Ok(next);
     }
     let edits = next.profile_edits.entry(profile.into()).or_default();
@@ -91,6 +91,65 @@ pub(crate) fn candidate(
     );
     Ok(next)
 }
+/// Remove one protocol-bound client preference. Never edit the source or any
+/// global setting, and never delete another endpoint sharing an old tag.
+pub(crate) fn restore_candidate(
+    app: &AppConfig,
+    profile: &str,
+    source: &Value,
+    endpoint: &Value,
+) -> AppResult<AppConfig> {
+    if endpoint
+        .pointer("/configuration/origin")
+        .and_then(Value::as_str)
+        != Some("canonical")
+        || !owns(source, endpoint)
+    {
+        return Err(AppError::conflict(
+            "endpoint",
+            "",
+            "端点来源归属未确认，仅可观测",
+        ));
+    }
+    let tag = endpoint["tag"]
+        .as_str()
+        .ok_or_else(|| AppError::invalid_argument("端点标签缺失"))?;
+    let mut next = app.clone();
+    let edits = next
+        .profile_edits
+        .get_mut(profile)
+        .ok_or_else(|| AppError::conflict("endpoint", tag, "客户端端点覆盖已不存在，请刷新"))?;
+    let preferences = edits
+        .get("endpoints")
+        .ok_or_else(|| AppError::conflict("endpoint", tag, "客户端端点覆盖已不存在，请刷新"))?;
+    let prefs = parse(preferences)?;
+    if !prefs.get(tag).is_some_and(|preference| {
+        Some(preference.protocol.as_str()) == endpoint["protocol"].as_str()
+    }) {
+        return Err(AppError::conflict(
+            "endpoint",
+            tag,
+            "端点协议或覆盖已变化，请刷新",
+        ));
+    }
+    // Preserve untouched preferences byte-for-value, including explicit null
+    // fields; typed validation must not normalize another resource's overlay.
+    let mut untouched = preferences
+        .as_object()
+        .cloned()
+        .ok_or_else(|| AppError::invalid_argument("端点覆盖必须为对象"))?;
+    untouched.remove(tag);
+    if untouched.is_empty() {
+        edits.remove("endpoints");
+    } else {
+        edits.insert("endpoints".into(), Value::Object(untouched));
+    }
+    if edits.is_empty() {
+        next.profile_edits.remove(profile);
+    }
+    Ok(next)
+}
+
 pub(crate) fn apply(source: &mut Value, preferences: &Value) -> AppResult<()> {
     let preferences = parse(preferences)?;
     if let Some(rows) = source.get_mut("endpoints").and_then(Value::as_array_mut) {

@@ -413,6 +413,64 @@ pub(crate) fn replace(state: &AppState, config: AppConfig) -> AppResult<()> {
     Ok(())
 }
 
+/// Save a confirmed local settings candidate without touching the runtime.
+/// The caller owns the configuration-operation lock and validates its scope.
+pub(crate) fn compare_and_replace_local(
+    state: &AppState,
+    expected: &AppConfig,
+    candidate: AppConfig,
+) -> AppResult<()> {
+    compare_and_replace_local_at(
+        state,
+        expected,
+        candidate,
+        &app_config_store::default_config_path()?,
+    )
+}
+
+pub(crate) fn compare_and_replace_local_at(
+    state: &AppState,
+    expected: &AppConfig,
+    candidate: AppConfig,
+    path: &std::path::Path,
+) -> AppResult<()> {
+    compare_and_replace_local_at_checked(state, expected, candidate, path, None)
+}
+
+pub(crate) fn compare_and_replace_local_at_authorized(
+    state: &AppState,
+    expected: &AppConfig,
+    candidate: AppConfig,
+    path: &std::path::Path,
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    compare_and_replace_local_at_checked(state, expected, candidate, path, Some(authorize))
+}
+fn compare_and_replace_local_at_checked(
+    state: &AppState,
+    expected: &AppConfig,
+    candidate: AppConfig,
+    path: &std::path::Path,
+    authorize: Option<&dyn Fn() -> AppResult<()>>,
+) -> AppResult<()> {
+    let mut current = lock(state.app_config(), "app_config")?;
+    if &*current != expected {
+        return Err(AppError::conflict(
+            "settings",
+            "",
+            "设置已变化，请重新预览导入范围",
+        ));
+    }
+    if let Some(authorize) = authorize {
+        authorize()?;
+        app_config_store::save_authorized(path, &candidate, authorize)?;
+    } else {
+        app_config_store::save(path, &candidate)?;
+    }
+    *current = candidate;
+    Ok(())
+}
+
 /// Upgrade only the previous client-owned node DNS defaults. Imported or
 /// user-edited server definitions and fallback orders remain authoritative.
 pub(crate) fn migrate_legacy_recommended_node_dns(config: &mut AppConfig) -> bool {

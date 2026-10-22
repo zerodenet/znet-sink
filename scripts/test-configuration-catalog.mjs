@@ -8,7 +8,9 @@ function load(file, deps = {}) {
   new Function('require','exports', outputText)(name => { assert.ok(name in deps, name); return deps[name]; }, exports);
   return exports;
 }
-const model = load('src/lib/features/configuration/catalog.ts');
+const model = load('src/lib/features/configuration/catalog.ts', {
+  '$lib/features/mobile/subscription-usage': load('src/lib/features/mobile/subscription-usage.ts'),
+});
 const entry = (extra = {}) => ({id:'profile:original',profileId:'original',name:'配置',active:false,hasContent:true,format:'json',path:null,sources:[],managedSource:null,...extra});
 test('source filtering groups legacy shared sources by configuration and finds their plugin names', () => {
   const entries = [entry(),entry({id:'profile:shared',name:'来源配置',sources:[{name:'A'},{name:'B'}]}),
@@ -21,6 +23,8 @@ test('provider aggregate quota is not fabricated as upload/download and missing 
   assert.equal(model.subscriptionUsedBytes({usedBytes:375,uploadBytes:100,downloadBytes:200}),375);
   assert.equal(model.subscriptionUsedBytes({}),null);
   assert.equal(model.subscriptionUsedBytes({uploadBytes:0,downloadBytes:0}),0);
+  assert.equal(model.subscriptionUsedBytes({uploadBytes:1}),null);
+  assert.equal(model.subscriptionUsedBytes({usedBytes:Number.MAX_SAFE_INTEGER+1}),null);
 });
 test('only usable configurations or enabled manual pending sources can be selected', () => {
   const choices = model.configurationOptions([entry(),entry({id:'subscription:pending',profileId:null,hasContent:false,sources:[{enabled:true}]}),

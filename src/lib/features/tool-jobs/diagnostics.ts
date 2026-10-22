@@ -47,9 +47,9 @@ export const dnsToolDiagnostics: ModuleSource[] = [{
 
 export const routeToolDiagnostics: ModuleSource[] = [{
   id: 'route-trace',
-  title: '路由追踪',
+  title: '路由评估',
   read: async () => {
     const runtime = await getToolRuntimeSnapshot();
-    return status(runtime, 'route-trace', '路由追踪', ['route_trace'], `${runtime.routeMaxConcurrency} 路`);
+    return status(runtime, 'route-trace', '路由评估', ['route_trace'], `${runtime.routeMaxConcurrency} 路`);
   },
 }];

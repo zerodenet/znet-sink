@@ -1,0 +1,25 @@
+import {test,expect} from '@playwright/test';
+test.use({viewport:{width:320,height:720}});
+test('configuration has two segments and guarded real editor drafts with rules secondary',async({page})=>{
+ await page.goto('/?panel=mobile-configuration');
+ await expect(page.getByRole('group',{name:'配置页面分段'})).toBeVisible();
+ await expect(page.getByRole('button',{name:'路由与规则集',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'路由与规则集',exact:true}).click();
+ await expect(page.getByLabel('移动配置导航')).toHaveText('rules');
+ await page.getByRole('button',{name:'新建',exact:true}).click();
+ await page.getByPlaceholder('例如：香港节点、办公配置').fill('保留草稿');
+ await page.keyboard.press('Escape');
+ await expect(page.getByRole('heading',{name:'放弃未保存的修改？'})).toBeVisible();
+ await page.getByRole('button',{name:'继续编辑',exact:true}).click();
+ await expect(page.getByPlaceholder('例如：香港节点、办公配置')).toHaveValue('保留草稿');
+ await page.keyboard.press('Escape');await page.getByRole('button',{name:'放弃修改',exact:true}).click();
+ await expect(page.getByPlaceholder('例如：香港节点、办公配置')).toHaveCount(0);
+ await page.getByRole('radio',{name:'订阅',exact:true}).click();
+ await page.getByRole('button',{name:'新增',exact:true}).click();
+ await page.getByPlaceholder('例如：官方订阅').fill('订阅草稿');
+ await page.keyboard.press('Escape');
+ await expect(page.getByRole('heading',{name:'放弃未保存的修改？'})).toBeVisible();
+ await page.getByRole('button',{name:'继续编辑',exact:true}).click();
+ await expect(page.getByPlaceholder('例如：官方订阅')).toHaveValue('订阅草稿');
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+});

@@ -1,0 +1,83 @@
+name: Android Debug application host
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main, feat/mobile-v0.0.3]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: znet-android-debug-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug-arm64-host:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
+    name: Android arm64 installable Debug host (minimum API 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/android-debug-host
+      ZNET_PRODUCT_FEATURES: tool-dns,tool-route,tool-node-probe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Install pinned Android tools
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 'ndk;27.3.13750724'
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev
+          echo "$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/znet-debug-android-user" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/znet-debug-gradle" >> "$GITHUB_ENV"
+          echo "ZNET_DEBUG_STATE_PARENT=$RUNNER_TEMP/znet-debug-private" >> "$GITHUB_ENV"
+          umask 077
+          mkdir -p "$RUNNER_TEMP/znet-debug-android-user" "$RUNNER_TEMP/znet-debug-gradle" "$RUNNER_TEMP/znet-debug-private"
+          test ! -e "$RUNNER_TEMP/znet-debug-android-user/debug.keystore"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-disabled: true
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --manifest-path src-tauri/Cargo.toml --locked
+      - name: Build and verify the actual Debug application host
+        # The shared build helper runs test-debug-android-apk.py and the actual
+        # signing/package/native/license checks once; this workflow owns setup only.
+        run: bash scripts/build-android-debug.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-debug-host-evidence
+          path: android-debug-host-evidence/
+          if-no-files-found: warn
+      - name: Remove ephemeral development signing and Gradle data
+        if: always()
+        run: rm -rf -- "$ANDROID_USER_HOME" "$GRADLE_USER_HOME" "$ZNET_DEBUG_STATE_PARENT"

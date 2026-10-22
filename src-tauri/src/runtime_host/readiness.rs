@@ -96,8 +96,9 @@ fn wait(
                         "core process exited during IPC readiness check",
                     ));
                 }
-                // IPC starts before listener orchestration. Require sustained
-                // responses so an immediate bind failure cannot look ready.
+                // This confirms only sustained control-plane availability.
+                // The host uses an empty bootstrap and must subsequently
+                // confirm config.apply_runtime before reporting running.
                 let since = healthy_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= stable_for {
                     return Ok(());

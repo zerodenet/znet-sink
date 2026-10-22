@@ -117,9 +117,9 @@ fn signed_page_resources_render_without_filesystem_or_network_urls() {
 // Fixtures exercise the real Host, which checks the compiled client version.
 const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 fn registration() -> Registration {
-    serde_json::from_value(serde_json::json!({"id":"org.example.plugin","repository":"https://github.com/example/plugin","publisher":{"id":"example","public_key":STANDARD.encode(ed25519_dalek::SigningKey::from_bytes(&SEED).verifying_key().to_bytes())},"name":"Example","description":"Test","license":"MIT","maintainers":["example"],"release_source":{"type":"github-releases","metadata_asset":"marketplace-entry.json"},"surfaces":[],"capabilities":["plugin.self.read","network.get","network.request","network.configured.request","records.summary.read","subscriptions.manage"]})).unwrap()
+    serde_json::from_value(serde_json::json!({"id":"org.example.plugin","repository":"https://github.com/example/plugin","publisher":{"id":"example","public_key":STANDARD.encode(ed25519_dalek::SigningKey::from_bytes(&SEED).verifying_key().to_bytes())},"name":"Example","description":"Test","license":"MIT","maintainers":["example"],"release_source":{"type":"github-releases","metadata_asset":"marketplace-entry.json"},"surfaces":[],"capabilities":["plugin.self.read","network.get","network.request","network.configured.request","records.summary.read","subscriptions.manage","tasks.schedule","plugin.storage.write","browser.callback"]})).unwrap()
 }
-fn setup(unsupported: bool) -> (tempfile::TempDir, Host, Manager) {
+pub(super) fn setup(unsupported: bool) -> (tempfile::TempDir, Host, Manager) {
     let source = "JSON.parse(hostCall('{\"capability\":\"plugin.self.read\",\"scope\":\"self\"}'))";
     let request = if unsupported {
         serde_json::json!({"capability":"records.summary.read","scope":"selection:test"})
@@ -128,7 +128,10 @@ fn setup(unsupported: bool) -> (tempfile::TempDir, Host, Manager) {
     };
     setup_component(source, request)
 }
-fn setup_component(source: &str, request: serde_json::Value) -> (tempfile::TempDir, Host, Manager) {
+pub(super) fn setup_component(
+    source: &str,
+    request: serde_json::Value,
+) -> (tempfile::TempDir, Host, Manager) {
     setup_component_with_configuration(source, request, serde_json::Value::Null)
 }
 fn setup_component_with_configuration(
@@ -320,6 +323,52 @@ fn approve(host: &Host, manager: &Manager) -> Review {
         .review
         .clone()
         .unwrap()
+}
+
+#[test]
+fn reviewed_configuration_and_controls_reject_stale_consent_without_replacing_draft_values() {
+    let (root, host, manager) = setup_component_with_configuration(
+        "42",
+        serde_json::json!({"capability":"plugin.self.read","scope":"self"}),
+        serde_json::json!({"title":"Settings","fields":[{"id":"label","label":"Label","kind":"text","required":true}]}),
+    );
+    let original = host.snapshot(&manager).components[0]
+        .review
+        .clone()
+        .unwrap();
+    let values = BTreeMap::from([("label".into(), "confirmed".into())]);
+    host.configure_reviewed(
+        &manager,
+        original.clone(),
+        values.clone(),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .unwrap();
+    let enabled = approve(&host, &manager);
+    assert!(host
+        .configure_reviewed(
+            &manager,
+            original.clone(),
+            BTreeMap::from([("label".into(), "old draft".into())]),
+            Arc::new(std::sync::atomic::AtomicBool::new(false))
+        )
+        .is_err());
+    assert_eq!(
+        configuration::values(root.path(), &enabled.key).unwrap(),
+        values
+    );
+    assert!(host.stop_reviewed(&manager, &original).is_err());
+    assert!(host
+        .revoke_permissions_reviewed(&manager, &original)
+        .is_err());
+    assert!(host.snapshot(&manager).components[0].enabled);
+    host.stop_reviewed(&manager, &enabled).unwrap();
+    let restarted = approve(&host, &manager);
+    assert!(host.stop_reviewed(&manager, &enabled).is_err());
+    assert!(host.snapshot(&manager).components[0].enabled);
+    host.revoke_permissions_reviewed(&manager, &restarted)
+        .unwrap();
+    assert!(!host.snapshot(&manager).components[0].enabled);
 }
 
 /// Generic installed-package acceptance hook for an external publisher. It is
@@ -1079,61 +1128,32 @@ fn tampering_or_registry_withdrawal_revokes_an_already_authorized_component() {
     }
 }
 #[test]
-fn uninstall_prevents_execution_and_cached_registry_survives_restart() {
-    let (_root, host, manager) = setup(false);
-    let review = approve(&host, &manager);
-    host.uninstall(&manager, "org.example.plugin", || Ok(()))
-        .unwrap();
-    assert!(host.run(&manager, review).is_err());
+fn legacy_uninstall_cannot_execute_cleanup_or_remove_installed_material() {
     let (root, host, manager) = setup(false);
     let _review = approve(&host, &manager);
-    let restarted = Host {
-        root: Some(root.path().into()),
-        ..Host::default()
-    };
-    let restarted_manager = Manager::default();
-    let snapshot = restarted.snapshot(&restarted_manager);
-    assert!(snapshot.checked);
-    assert!(snapshot.components[0].enabled);
-}
-
-#[test]
-fn uninstall_cleanup_failure_keeps_package_disabled_and_allows_retry() {
-    let (root, host, manager) = setup(false);
-    let review = approve(&host, &manager);
+    let called = std::cell::Cell::new(false);
+    let before = std::fs::read(root.path().join("installed.json")).unwrap();
     let error = host
         .uninstall(&manager, "org.example.plugin", || {
-            assert!(manager.component_snapshots().iter().all(|p| !p.enabled));
-            Err(AppError::internal("cleanup failed"))
+            called.set(true);
+            Ok(())
         })
         .err()
         .unwrap();
-    assert!(error.message.contains("插件已停用并保留"));
-    assert!(host
-        .store()
-        .unwrap()
-        .list()
-        .unwrap()
-        .contains(&"org.example.plugin".into()));
-    assert!(host.run(&manager, review).is_err());
+    assert_eq!(error.code, "plugin_uninstall_preview_required");
+    assert!(!called.get());
+    assert_eq!(
+        std::fs::read(root.path().join("installed.json")).unwrap(),
+        before
+    );
     let restarted = Host {
         root: Some(root.path().into()),
-        ..Host::default()
+        ..Default::default()
     };
-    let restarted_manager = Manager::default();
-    let snapshot = restarted.snapshot(&restarted_manager);
+    let snapshot = restarted.snapshot(&Manager::default());
+    assert!(snapshot.checked);
     assert_eq!(snapshot.components.len(), 1);
-    assert!(!snapshot.components[0].enabled);
-    let snapshot = host
-        .uninstall(&manager, "org.example.plugin", || Ok(()))
-        .unwrap();
-    assert!(snapshot.components.is_empty());
-    assert!(!host
-        .store()
-        .unwrap()
-        .list()
-        .unwrap()
-        .contains(&"org.example.plugin".into()));
+    assert!(snapshot.components[0].enabled);
 }
 
 #[test]
@@ -1548,3 +1568,6 @@ fn enabled_startup_hook_restores_consent_and_atomically_updates_opaque_state() {
         Some(next_value)
     );
 }
+
+#[path = "tests/execution_boundary.rs"]
+mod execution_boundary;

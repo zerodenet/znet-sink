@@ -22,6 +22,7 @@ impl ClientCore {
         Self {
             snapshot: ClientCoreSnapshot {
                 revision: SnapshotRevision(1),
+                scope_generation: SnapshotRevision(1),
                 scope: ClientScope {
                     profile_id: active_profile_id,
                     config_revision: if has_profile {
@@ -103,6 +104,7 @@ impl ClientCore {
     ) {
         self.snapshot.scope.profile_id = active_profile_id;
         self.snapshot.scope.config_revision = config_revision;
+        self.advance_scope_generation();
         self.advance_snapshot();
     }
 
@@ -112,6 +114,7 @@ impl ClientCore {
         self.snapshot.scope.core_instance_id.0 =
             self.snapshot.scope.core_instance_id.0.saturating_add(1);
         self.snapshot.source_status = SourceStatus::Ready;
+        self.advance_scope_generation();
         self.advance_snapshot();
     }
 
@@ -122,6 +125,7 @@ impl ClientCore {
         let status_changed = self.snapshot.source_status != SourceStatus::Offline;
         self.snapshot.source_status = SourceStatus::Offline;
         if status_changed {
+            self.advance_scope_generation();
             self.advance_snapshot();
         }
     }
@@ -159,5 +163,9 @@ impl ClientCore {
 
     pub fn advance_snapshot(&mut self) {
         self.snapshot.revision.0 = self.snapshot.revision.0.saturating_add(1);
+    }
+
+    fn advance_scope_generation(&mut self) {
+        self.snapshot.scope_generation.0 = self.snapshot.scope_generation.0.saturating_add(1);
     }
 }

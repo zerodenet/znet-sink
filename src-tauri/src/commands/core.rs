@@ -200,8 +200,9 @@ pub fn core_events_start(
     events: Option<Vec<String>>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreEventSubscription> {
-    let generation = state.next_core_event_generation();
+    crate::kernel::connection::event_filter::EventFilter::new(events.clone())?;
     let options = resolve_options(&state, options)?;
+    let generation = state.next_core_event_generation();
     core_events::start(
         app,
         state.core_event_generation(),

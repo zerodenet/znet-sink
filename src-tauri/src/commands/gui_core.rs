@@ -6,16 +6,11 @@ use crate::models::gui_core::GuiFakeIpClearResult;
 use crate::services::probe;
 use serde::Deserialize;
 use std::time::{Duration, Instant};
-use std::{
-    fs,
-    io::{BufRead, BufReader, BufWriter, Write},
-    path::Path,
-};
 #[cfg(feature = "tool-node-probe")]
 use tauri::Emitter;
 use tauri::{AppHandle, Manager, State};
 
-use crate::client_core::{ClientCoreSnapshot, NodeScreenSnapshot};
+use crate::client_core::{ClientCoreSnapshot, ClientScope, NodeScreenSnapshot};
 #[cfg(feature = "tool-node-probe")]
 use crate::client_core::{ProbeJobId, ProbeJobKind, ProbeJobSnapshot, StartProbeRequest};
 use crate::errors::{AppError, AppResult};
@@ -34,6 +29,7 @@ use crate::services::common;
 use crate::services::{core_config, core_process, diagnostic_storage};
 use crate::state::app_state::AppState;
 
+mod diagnostic_export;
 mod dns_apply;
 mod dns_transaction;
 
@@ -100,11 +96,14 @@ pub fn gui_probe_job_cancel(
 
 #[cfg(feature = "tool-node-probe")]
 #[tauri::command]
-pub fn gui_probe_job_start(
+pub async fn gui_probe_job_start(
     app_handle: AppHandle,
     state: State<'_, AppState>,
     request: StartProbeRequest,
+    expected_scope: Option<ClientScope>,
 ) -> AppResult<ProbeJobSnapshot> {
+    let _operation = state.proxy_config_operation().lock().await;
+    state.ensure_client_scope(expected_scope.as_ref())?;
     if request.kind == ProbeJobKind::ScheduledPolicyObservation {
         return Err(AppError::invalid_argument(
             "scheduled policy observations are recorded from kernel events and cannot be started manually",
@@ -112,7 +111,7 @@ pub fn gui_probe_job_start(
     }
     let request = probe::normalize_start_request(state.inner(), request)?;
     let outcome = state
-        .start_client_probe(request)
+        .start_client_probe_scoped(request, expected_scope.as_ref())
         .map_err(AppError::client_core)?;
     if outcome.created {
         if let Err(error) = state.probe_runtime().checkpoint(state.capabilities()) {
@@ -244,8 +243,10 @@ pub async fn gui_select_policy(
     state: State<'_, AppState>,
     policy_tag: String,
     target_tag: String,
+    expected_scope: Option<ClientScope>,
 ) -> AppResult<GuiPolicySelectionResult> {
     let _operation = state.proxy_config_operation().lock().await;
+    state.ensure_client_scope(expected_scope.as_ref())?;
     let opts = default_opts(state.inner());
     let result = ZeroAdapter::new()
         .select_policy(policy_tag.clone(), target_tag.clone(), opts)
@@ -296,12 +297,12 @@ pub async fn gui_close_connection(
     state: State<'_, AppState>,
     flow_id: String,
 ) -> AppResult<GuiConnectionCloseResult> {
-    let binding = crate::services::flow_observation::binding(state.inner())?;
-    let opts = crate::models::core::CoreIpcOptions {
-        socket: Some(binding.endpoint.path),
-        timeout_ms: Some(binding.timeout.as_millis() as u64),
-    };
-    ZeroAdapter::new().close_connection(flow_id, opts).await
+    let _ = (state, flow_id);
+    Err(AppError {
+        code: "unsupported",
+        message: "旧连接关闭入口不具备原实例与目标绑定；请重新核对并选择连接关闭".into(),
+        details: None,
+    })
 }
 
 #[tauri::command]
@@ -804,351 +805,40 @@ pub struct GuiDiagnosticExport {
     pub created_at_unix_ms: u64,
 }
 
-/// Export a local, support-ready diagnostic directory without proxy config
-/// contents, subscription URLs, credentials, or other user secrets.
+/// Deliver only the immutable public projection that the user previewed.
+/// Arbitrary stored messages, fields, payloads and files are never copied.
 #[tauri::command]
-pub async fn gui_export_diagnostics(state: State<'_, AppState>) -> AppResult<GuiDiagnosticExport> {
+pub async fn gui_export_diagnostics(
+    app_handle: AppHandle,
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    plan_id: String,
+) -> AppResult<GuiDiagnosticExport> {
+    diagnostic_export::admit(window.label(), crate::mobile_host::snapshot().mobile)?;
     crate::services::native_operation::execute_async(
         state.inner(),
         "diagnostic.export",
         "sanitized-bundle",
         Duration::from_secs(60),
-        async {
-            tauri::async_runtime::spawn_blocking(export_diagnostics)
-                .await
-                .map_err(|error| {
-                    AppError::internal(format!("diagnostic export worker failed: {error}"))
-                })?
+        async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                let state = app_handle.state::<AppState>();
+                diagnostic_export::export(state.inner(), &plan_id)
+            })
+            .await
+            .map_err(|_| AppError::internal("诊断导出结果未确认，请检查原目标；原计划不会重放"))?
         },
     )
     .await
 }
 
-fn export_diagnostics() -> AppResult<GuiDiagnosticExport> {
-    diagnostic_storage::with_storage_lock(export_diagnostics_locked)
-}
-
-fn export_diagnostics_locked() -> AppResult<GuiDiagnosticExport> {
-    let created_at_unix_ms = common::now_unix_ms();
-    let data_dir = crate::services::data_dir()?;
-    let export_dir = data_dir
-        .join("diagnostics")
-        .join(format!("znet-sink-diagnostics-{created_at_unix_ms}"));
-    fs::create_dir_all(&export_dir).map_err(|error| {
-        AppError::internal(format!("create diagnostic export directory: {error}"))
-    })?;
-
-    let candidates = diagnostic_storage::diagnostic_log_paths()?;
-    let mut files = Vec::new();
-    for source in candidates {
-        if !source.is_file() {
-            continue;
-        }
-        let Some(file_name) = source.file_name() else {
-            continue;
-        };
-        let destination = export_dir.join(file_name);
-        copy_diagnostic_file(&source, &destination)?;
-        files.push(file_name.to_string_lossy().to_string());
-    }
-
-    let manifest_name = "manifest.json";
-    let manifest = serde_json::json!({
-        "schema": "znet.diagnostics.v1",
-        "createdAtUnixMs": created_at_unix_ms,
-        "appVersion": env!("CARGO_PKG_VERSION"),
-        "os": std::env::consts::OS,
-        "arch": std::env::consts::ARCH,
-        "files": files,
-        "privacy": {
-            "proxyConfigIncluded": false,
-            "subscriptionUrlsIncluded": false,
-            "credentialsIncluded": false,
-            "structuredLogsSanitized": true
-        }
-    });
-    write_pretty_json(&export_dir.join(manifest_name), &manifest)?;
-    files.push(manifest_name.to_string());
-
-    crate::services::file_logger::emit(
-        "info",
-        "diagnostics",
-        "diagnostic export created",
-        Some(serde_json::json!({
-            "directory": export_dir.to_string_lossy(),
-            "file_count": files.len()
-        })),
-    );
-
-    Ok(GuiDiagnosticExport {
-        directory: export_dir.to_string_lossy().to_string(),
-        files,
-        created_at_unix_ms,
-    })
-}
-
-fn copy_diagnostic_file(source: &Path, destination: &Path) -> AppResult<()> {
-    match source.file_name().and_then(|name| name.to_str()) {
-        Some(name) if name == "debug.log.jsonl" || name.starts_with("debug.log.jsonl.") => {
-            write_sanitized_jsonl(source, destination, sanitize_debug_record)
-        }
-        Some(name) if name.ends_with(".jsonl") => {
-            write_sanitized_jsonl(source, destination, sanitize_structured_record)
-        }
-        _ => fs::copy(source, destination)
-            .map(|_| ())
-            .map_err(|error| AppError::internal(format!("copy diagnostic file: {error}"))),
-    }
-}
-
-fn write_sanitized_jsonl(
-    source: &Path,
-    destination: &Path,
-    sanitize: fn(&mut serde_json::Value),
+/// Release only an unsubmitted diagnostic preview; never undo a delivery.
+#[tauri::command]
+pub fn gui_discard_diagnostics(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    plan_id: String,
 ) -> AppResult<()> {
-    let input = fs::File::open(source)
-        .map_err(|error| AppError::internal(format!("open diagnostic log: {error}")))?;
-    let output = fs::File::create(destination)
-        .map_err(|error| AppError::internal(format!("create diagnostic log: {error}")))?;
-    let mut writer = BufWriter::new(output);
-
-    for line in BufReader::new(input).lines() {
-        let line =
-            line.map_err(|error| AppError::internal(format!("read diagnostic log: {error}")))?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let mut value = serde_json::from_str::<serde_json::Value>(&line).unwrap_or_else(|_| {
-            serde_json::json!({
-                "redacted": true,
-                "reason": "unparseable diagnostic record"
-            })
-        });
-        sanitize(&mut value);
-        serde_json::to_writer(&mut writer, &value)
-            .map_err(|error| AppError::internal(format!("serialize diagnostic log: {error}")))?;
-        writer
-            .write_all(b"\n")
-            .map_err(|error| AppError::internal(format!("write diagnostic log: {error}")))?;
-    }
-    writer
-        .flush()
-        .map_err(|error| AppError::internal(format!("flush diagnostic log: {error}")))
-}
-
-fn sanitize_debug_record(value: &mut serde_json::Value) {
-    if let Some(payload) = value.get_mut("payload") {
-        *payload = summarize_debug_payload(payload);
-    }
-    sanitize_structured_record(value);
-}
-
-fn summarize_debug_payload(payload: &serde_json::Value) -> serde_json::Value {
-    let Some(object) = payload.as_object() else {
-        return serde_json::json!({ "redacted": true });
-    };
-
-    let mut summary = serde_json::Map::new();
-    summary.insert("redacted".to_string(), serde_json::Value::Bool(true));
-    let mut keys = object.keys().cloned().collect::<Vec<_>>();
-    keys.sort_unstable();
-    summary.insert("topLevelKeys".to_string(), serde_json::json!(keys));
-
-    for key in [
-        "api_id",
-        "event_type",
-        "id",
-        "matched",
-        "ok",
-        "request_id",
-        "requestId",
-        "schema_id",
-        "sequence",
-        "status",
-        "type",
-    ] {
-        if let Some(value) = object.get(key).filter(|value| {
-            value.is_boolean() || value.is_number() || value.is_string() || value.is_null()
-        }) {
-            summary.insert(key.to_string(), value.clone());
-        }
-    }
-
-    serde_json::Value::Object(summary)
-}
-
-fn sanitize_structured_record(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(object) => {
-            for (key, value) in object {
-                if is_sensitive_diagnostic_key(key) {
-                    *value = serde_json::Value::String("[redacted]".to_string());
-                } else {
-                    sanitize_structured_record(value);
-                }
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                sanitize_structured_record(value);
-            }
-        }
-        serde_json::Value::String(value) => *value = redact_urls(value),
-        _ => {}
-    }
-}
-
-fn is_sensitive_diagnostic_key(key: &str) -> bool {
-    let key: String = key
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    matches!(
-        key.as_str(),
-        "auth"
-            | "authorization"
-            | "config"
-            | "content"
-            | "cookie"
-            | "credentials"
-            | "headers"
-            | "password"
-            | "privatekey"
-            | "psk"
-            | "secret"
-            | "token"
-            | "uri"
-            | "url"
-            | "uuid"
-    ) || key.ends_with("password")
-        || key.ends_with("secret")
-        || key.ends_with("token")
-        || key.ends_with("url")
-        || key.ends_with("privatekey")
-        || key.ends_with("apikey")
-}
-
-fn redact_urls(value: &str) -> String {
-    const SENSITIVE_SCHEMES: &[&str] = &[
-        "https://",
-        "http://",
-        "hysteria2://",
-        "ss://",
-        "trojan://",
-        "vless://",
-        "vmess://",
-    ];
-
-    let mut output = String::with_capacity(value.len());
-    let mut remaining = value;
-    while let Some(index) = SENSITIVE_SCHEMES
-        .iter()
-        .filter_map(|scheme| remaining.find(scheme))
-        .min()
-    {
-        output.push_str(&remaining[..index]);
-        output.push_str("[redacted-url]");
-        let url = &remaining[index..];
-        let end = url
-            .char_indices()
-            .find_map(|(offset, character)| {
-                (offset > 0
-                    && (character.is_whitespace()
-                        || matches!(character, '"' | '\'' | '<' | '>' | ')' | ']' | '}')))
-                .then_some(offset)
-            })
-            .unwrap_or(url.len());
-        remaining = &url[end..];
-    }
-    output.push_str(remaining);
-    output
-}
-
-fn write_pretty_json(path: &Path, value: &serde_json::Value) -> AppResult<()> {
-    let content = serde_json::to_vec_pretty(value)
-        .map_err(|error| AppError::internal(format!("serialize diagnostic manifest: {error}")))?;
-    fs::write(path, content)
-        .map_err(|error| AppError::internal(format!("write diagnostic manifest: {error}")))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{redact_urls, sanitize_debug_record, sanitize_structured_record};
-
-    #[test]
-    fn ipc_archive_exports_apply_the_same_sanitization_as_the_active_segment() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("debug.log.jsonl.1");
-        let destination = root.path().join("export.jsonl");
-        std::fs::write(
-            &source,
-            serde_json::json!({"payload": {
-                "params": {"config": {"private_key": "canary-secret"}},
-                "url": "https://private.example/token"
-            }})
-            .to_string(),
-        )
-        .unwrap();
-        super::copy_diagnostic_file(&source, &destination).unwrap();
-        let output = std::fs::read_to_string(destination).unwrap();
-        assert!(!output.contains("canary-secret"));
-        assert!(!output.contains("private.example"));
-    }
-
-    #[test]
-    fn diagnostic_log_sanitizer_removes_urls_and_credentials() {
-        let mut record = serde_json::json!({
-            "message": "request failed for https://example.com/sub?token=secret)",
-            "fields": {
-                "url": "https://example.com/sub?token=secret",
-                "password": "secret",
-                "operation": "auto_sync"
-            }
-        });
-
-        sanitize_structured_record(&mut record);
-        let serialized = record.to_string();
-        assert!(!serialized.contains("example.com"));
-        assert!(!serialized.contains("secret"));
-        assert!(serialized.contains("auto_sync"));
-        assert_eq!(redact_urls("ok"), "ok");
-    }
-
-    #[test]
-    fn diagnostic_sanitizer_redacts_mixed_case_credentials_in_nested_records() {
-        let mut record = serde_json::json!({"fields": [{
-            "privateKey": "credential-a", "accessToken": "credential-b",
-            "api-key": "credential-c", "client_secret": "credential-d",
-            "proxyPassword": "credential-e", "operationId": "keep-me"
-        }]});
-        sanitize_structured_record(&mut record);
-        assert!(!record.to_string().contains("credential-"));
-        assert_eq!(record["fields"][0]["operationId"], "keep-me");
-    }
-
-    #[test]
-    fn diagnostic_debug_sanitizer_keeps_envelope_but_drops_payload_content() {
-        let mut record = serde_json::json!({
-            "id": 9,
-            "frameType": "command",
-            "payload": {
-                "type": "command",
-                "id": "request-1",
-                "matched": false,
-                "request": {
-                    "config": { "password": "secret" }
-                }
-            }
-        });
-
-        sanitize_debug_record(&mut record);
-        let serialized = record.to_string();
-        assert!(!serialized.contains("password"));
-        assert!(!serialized.contains("secret"));
-        assert_eq!(record["payload"]["type"], "command");
-        assert_eq!(record["payload"]["id"], "request-1");
-        assert_eq!(record["payload"]["matched"], false);
-        assert_eq!(record["payload"]["redacted"], true);
-    }
+    diagnostic_export::admit(window.label(), crate::mobile_host::snapshot().mobile)?;
+    crate::services::diagnostics::discard(state.inner(), &plan_id)
 }

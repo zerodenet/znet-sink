@@ -52,7 +52,7 @@
       <label class="grid gap-2">订阅地址<Input bind:value={url} type="url" disabled={saving || !!savedId} /></label>
       <FieldSelect bind:value={format} options={formats} disabled={saving || !!savedId} aria-label="订阅格式" />
       <label class="grid gap-2">自动更新间隔（秒，0 为手动）<Input type="number" min={0} step={1} bind:value={interval} disabled={saving || !!savedId} /></label>
-      <label class="flex gap-2"><Choice bind:checked={enabled} disabled={saving || !!savedId} />启用此订阅来源（允许手动及自动更新）</label>
+      <label class="flex gap-2"><Choice bind:checked={enabled} disabled={saving || !!savedId} />参与自动更新（关闭后仍可手动更新）</label>
       <label class="grid gap-2">User-Agent<Input bind:value={userAgent} disabled={saving || !!savedId} aria-describedby="source-user-agent-help" /></label><p id="source-user-agent-help" class="text-muted-foreground text-xs">填写后完全覆盖默认 User-Agent</p>
       {#if source}<p class="text-muted-foreground text-xs">保存后，在配置列表点击更新以获取新内容。</p>{/if}
       {#if error}<p role="alert" class="text-destructive">{error}</p>{/if}

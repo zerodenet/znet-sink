@@ -1,3 +1,4 @@
+mod build_license_inventory;
 fn main() {
     println!("cargo:rerun-if-env-changed=ZNET_PRODUCT");
     println!("cargo:rerun-if-changed=../products/desktop.json");
@@ -46,5 +47,6 @@ fn main() {
             "embedded frontend/backend features differ"
         );
     }
+    build_license_inventory::emit(&selected);
     tauri_build::build()
 }

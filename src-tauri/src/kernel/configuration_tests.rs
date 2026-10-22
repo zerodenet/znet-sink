@@ -7,6 +7,71 @@ use std::{
 };
 
 #[tokio::test]
+async fn bound_tun_command_keeps_long_response_budget_without_reconnecting_or_replay() {
+    // Synthetic IPC peer only: this does not create a host TUN or claim VPN
+    // acceptance. The delayed real envelope exceeds the ordinary query budget.
+    let directory = tempfile::tempdir_in("/tmp").unwrap();
+    let path = directory.path().join("tun-budget.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    let worker = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut commands = 0;
+        for line in BufReader::new(stream).lines() {
+            let Ok(line) = line else { break };
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let result = if request["type"] == "subscribe" {
+                json!("subscribed")
+            } else {
+                assert_eq!(request["method"], "tun.start");
+                commands += 1;
+                thread::sleep(std::time::Duration::from_millis(1200));
+                json!({"accepted":true})
+            };
+            if writeln!(
+                writer,
+                "{}",
+                json!({"api_id":"zero.api.v1","id":request["id"],"ok":true,"result":result})
+            )
+            .is_err()
+            {
+                break;
+            }
+        }
+        listener.set_nonblocking(true).unwrap();
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        commands
+    });
+    let bound = BoundControl::connect(CoreIpcOptions {
+        socket: Some(path.to_string_lossy().into_owned()),
+        timeout_ms: Some(1000),
+    })
+    .await
+    .unwrap();
+    let original_budget = bound.binding.timeout;
+    assert_eq!(
+        bound.command("tun.start", json!({})).await.unwrap()["accepted"],
+        true
+    );
+    assert_eq!(
+        bound.binding.timeout, original_budget,
+        "queries retain their ordinary budget"
+    );
+    connection::reset_endpoint(&bound.binding.endpoint);
+    assert!(bound.command("tun.start", json!({})).await.is_err());
+    assert_eq!(
+        worker.join().unwrap(),
+        1,
+        "retired original connection is never replayed"
+    );
+}
+
+#[tokio::test]
 async fn bound_configuration_uses_the_real_envelope_and_never_replays_a_lost_submission() {
     for (lose_reply, persistence) in [
         (false, Some("runtime_only")),

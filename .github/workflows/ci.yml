@@ -9,6 +9,7 @@ on:
     branches:
       - develop
       - main
+      - feat/mobile-v0.0.3
   workflow_dispatch:
 
 concurrency:
@@ -82,6 +83,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check explicit mobile build policy and retained routine gates
+        run: node --test scripts/test-workflow-policy.mjs
+
       - name: Run feature ownership and diagnostics regression
         run: pnpm test:feature-owners
 
@@ -97,8 +101,17 @@ jobs:
       - name: Run professional overview state regression
         run: pnpm test:overview
 
+      - name: Check mobile client scope, traffic and Packet contracts
+        run: pnpm test:mobile
+
+      - name: Check dependency inventory provenance and target guards
+        run: pnpm test:licenses
+
       - name: Run application lifecycle contract
         run: pnpm test:runtime-lifecycle
+
+      - name: Run desktop shell contract
+        run: pnpm test:desktop-shell
 
       - name: Validate release policy and stable evidence gate
         run: pnpm test:release-version
@@ -124,10 +137,15 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
-  ui-controls:
-    name: UI controls (Chromium and WebKit)
+  ui-browser:
+    name: UI controls (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Keep the complete suite for both engines within independent job budgets.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -138,21 +156,37 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium webkit
-      - run: pnpm test:ui-browser
+      - run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+      - run: pnpm test:ui-browser --project=${{ matrix.browser }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ui-control-browser-results
+          name: ui-control-browser-results-${{ matrix.browser }}
           path: |
             playwright-report/
             test-results/
           retention-days: 7
 
+  ui-controls:
+    name: UI controls (Chromium and WebKit)
+    runs-on: ubuntu-latest
+    needs: ui-browser
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Require both complete browser suites
+        run: test "${{ needs.ui-browser.result }}" = success
+
   windows-client-core:
-    name: Windows DNS and client core
-    runs-on: windows-2025
+    name: ${{ matrix.runner == 'windows-2025' && 'Windows DNS and client core' || 'Windows DNS and client core (windows-2022)' }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Preserve the VS2026 check and compare with the supported VS2022 image
+        # while diagnosing a pre-test STATUS_ENTRYPOINT_NOT_FOUND failure.
+        runner: [windows-2025, windows-2022]
     steps:
       - uses: actions/checkout@v4
 
@@ -187,16 +221,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: windows-client-${{ matrix.runner }}
+          cache-on-failure: true
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
+      - name: Check portable loader diagnostic parser
+        run: python -B scripts/test-windows-loader-parser.py
+
       - name: Run client core tests
+        id: client-tests
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
+          # Tauri's application manifest is linked to bin targets, but its
+          # library test EXE needs Common Controls v6 before the loader runs.
+          # Use an absolute runner path because Cargo changes the test cwd.
+          $testRunner = Join-Path $PWD 'scripts/run-windows-test.ps1'
+          $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER = "pwsh -NoProfile -File $testRunner"
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $log = Join-Path $env:RUNNER_TEMP 'client-core-tests.log'
-          cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked -j 1 2>&1 | Tee-Object -FilePath $log
+          cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked --no-fail-fast -j 1 2>&1 | Tee-Object -FilePath $log
           $status = $LASTEXITCODE
           if ($status -ne 0) {
             $diagnostic = ((Get-Content -LiteralPath $log -Tail 40) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
@@ -204,6 +251,23 @@ jobs:
             exit $status
           }
 
+      - name: Diagnose native test loader failures
+        if: failure() && steps.client-tests.outcome == 'failure'
+        shell: pwsh
+        run: |
+          python scripts/diagnose-windows-loader.py src-tauri/target/debug/deps 2>&1 |
+            Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'windows-loader-diagnostic.log')
+
+      - name: Preserve Windows test failure evidence
+        if: failure() && steps.client-tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-loader-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/client-core-tests.log
+            ${{ runner.temp }}/windows-loader-diagnostic.log
+          if-no-files-found: warn
+          retention-days: 7
       # Tauri boxes responder tasks only with debug_assertions. The release
       # path must also fit Windows' default 1 MiB thread stack.
       - name: Build embedded frontend for Release regression
@@ -471,3 +535,6 @@ jobs:
 
       - name: Verify kernel adapter and route composition compatibility
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib compatibility_tests -j 2
+
+      - name: Verify actual Rust license embedding guards
+        run: node scripts/test-license-build-hook.mjs

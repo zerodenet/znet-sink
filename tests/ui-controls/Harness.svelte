@@ -1,4 +1,15 @@
 <script lang="ts">
+  import LocalDataFixture from './LocalDataFixture.svelte';
+  import FlowCloseFixture from './FlowCloseFixture.svelte';
+  import PacketPaginationFixture from './PacketPaginationFixture.svelte';
+  import DesktopDiagnosticExportFixture from './DesktopDiagnosticExportFixture.svelte';
+  import WorkspaceFixture from './WorkspaceFixture.svelte';
+  import PluginPageFixture from './PluginPageFixture.svelte';
+  import NativeDocumentsFixture from './NativeDocumentsFixture.svelte';
+  import ProfileRemovalFixture from './ProfileRemovalFixture.svelte';
+  import ConnectionExportFixture from './ConnectionExportFixture.svelte';
+  import MobileConfigurationFixture from "./MobileConfigurationFixture.svelte";
+  import MobileNodesFixture from "./MobileNodesFixture.svelte";
   import EndpointsWorkspaceFixture from "./EndpointsWorkspaceFixture.svelte";
   import PluginsWorkspaceFixture from "./PluginsWorkspaceFixture.svelte";
   import CapabilitiesTab from '$lib/components/tabs/CapabilitiesTab.svelte';
@@ -19,6 +30,8 @@
   import KernelVersionCard from '$lib/components/core/KernelVersionCard.svelte';
   import RulesTab from '$lib/components/tabs/RulesTab.svelte';
   import TunSettingsPanel from '$lib/components/settings/TunSettingsPanel.svelte';
+  import ProfileMaterials from '$lib/components/configuration/ProfileMaterials.svelte';
+  import SubscriptionSources from '$lib/components/configuration/SubscriptionSources.svelte';
   import ProfilesTab from '$lib/components/tabs/ProfilesTab.svelte';
   import SubscriptionsTab from '$lib/components/tabs/SubscriptionsTab.svelte';
   import { Button } from '$lib/components/ui/button';
@@ -50,7 +63,27 @@
 </script>
 
 <div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
-{#if selectedPanel === 'plugins-shell'}
+{#if selectedPanel === 'flow-close'}
+  <FlowCloseFixture/>
+{:else if selectedPanel === 'packet-pagination'}
+  <PacketPaginationFixture />
+{:else if selectedPanel === 'workspace'}
+  <WorkspaceFixture />
+{:else if selectedPanel === 'desktop-diagnostic-export'}
+  <DesktopDiagnosticExportFixture />
+{:else if selectedPanel === 'plugin-page'}
+  <PluginPageFixture />
+{:else if selectedPanel === 'native-documents'}
+  <NativeDocumentsFixture />
+{:else if selectedPanel === 'profile-removal'}
+  <ProfileRemovalFixture />
+{:else if selectedPanel === 'connection-export'}
+  <ConnectionExportFixture />
+{:else if selectedPanel === 'mobile-configuration'}
+  <MobileConfigurationFixture />
+{:else if selectedPanel === 'mobile-nodes'}
+  <MobileNodesFixture />
+{:else if selectedPanel === 'plugins-shell'}
   <div class="h-dvh overflow-hidden"><PluginsWorkspaceFixture /></div>
 {:else if selectedPanel === 'endpoints-shell'}
   <div class="h-dvh overflow-hidden"><EndpointsWorkspaceFixture /></div>
@@ -70,7 +103,7 @@
     <Switch aria-label="测试开关" />
   </section>
   <div class="flex h-[650px] min-h-0 flex-col">
-    {#if selectedPanel === 'capabilities'}<CapabilitiesTab />{:else if selectedPanel === 'plugins'}<PluginsTab />{:else if selectedPanel === 'connections'}<ConnectionInspectorWorkspace />{:else if selectedPanel === 'nodes'}<NodesTab />{:else if selectedPanel === 'dns'}<DnsSettingsPanel />{:else if selectedPanel === 'url-test'}<UrlTestSettingsPanel />{:else if selectedPanel === 'runtime-network'}<RuntimeNetworkSettingsPanel />{:else if selectedPanel === 'tools'}<DiagnosticsPanel />{:else if selectedPanel === 'modules'}<ModuleDiagnosticsFixture />{:else if selectedPanel === 'settings' || selectedPanel === 'logs'}<SettingsLogsFixture />{:else if selectedPanel === 'mode-overview'}<ModeOverviewFixture />{:else if selectedPanel === 'overview'}<OverviewFixture />{:else if selectedPanel === 'profiles'}<ProfilesTab />{:else if selectedPanel === 'subscriptions'}<SubscriptionsTab />{:else if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
+    {#if selectedPanel === 'local-data'}<LocalDataFixture />{:else if selectedPanel === 'capabilities'}<CapabilitiesTab />{:else if selectedPanel === 'plugins'}<PluginsTab />{:else if selectedPanel === 'connections'}<ConnectionInspectorWorkspace />{:else if selectedPanel === 'nodes'}<NodesTab />{:else if selectedPanel === 'dns'}<DnsSettingsPanel />{:else if selectedPanel === 'url-test'}<UrlTestSettingsPanel />{:else if selectedPanel === 'runtime-network'}<RuntimeNetworkSettingsPanel />{:else if selectedPanel === 'tools'}<DiagnosticsPanel />{:else if selectedPanel === 'modules'}<ModuleDiagnosticsFixture />{:else if selectedPanel === 'settings' || selectedPanel === 'logs'}<SettingsLogsFixture />{:else if selectedPanel === 'mode-overview'}<ModeOverviewFixture />{:else if selectedPanel === 'overview'}<OverviewFixture />{:else if selectedPanel === 'profiles'}{#if new URLSearchParams(window.location.search).get('fixture') === 'profile-editor' && !new URLSearchParams(window.location.search).get('mode')?.startsWith('unified')}<ProfileMaterials />{:else}<ProfilesTab />{/if}{:else if selectedPanel === 'subscriptions'}<SubscriptionSources />{:else if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
   </div>
   <output aria-label="保存结果">{saved}</output>
 </main>

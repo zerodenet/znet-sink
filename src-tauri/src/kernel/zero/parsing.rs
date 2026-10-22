@@ -721,12 +721,42 @@ fn endpoint_display(host: Option<&str>, port: Option<u64>) -> Option<String> {
     }
 }
 
-pub fn parse_connection_close(value: &Value, flow_id: String) -> GuiConnectionCloseResult {
-    GuiConnectionCloseResult {
-        flow_id: string_at(value, &["flow_id", "flowId"]).unwrap_or(flow_id),
-        closed: bool_at(value, &["closed"]).unwrap_or(true),
-        message: string_at(value, &["message"]),
+pub fn parse_connection_close(
+    value: &Value,
+    flow_id: String,
+) -> AppResult<GuiConnectionCloseResult> {
+    let uncertain = || AppError {
+        code: "connection_close_unknown",
+        message: "连接关闭回执缺失或不匹配；结果未确认，不会自动重放".into(),
+        details: None,
+    };
+    match value.get("accepted").and_then(Value::as_bool) {
+        Some(false) => {
+            return Err(AppError {
+                code: "connection_close_rejected",
+                message: "内核明确拒绝连接关闭，未计为成功".into(),
+                details: None,
+            })
+        }
+        Some(true) => {}
+        None => return Err(uncertain()),
     }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or_else(uncertain)?;
+    if result.get("flow_id").and_then(Value::as_str) != Some(flow_id.as_str()) {
+        return Err(uncertain());
+    }
+    let closed = result
+        .get("closed")
+        .and_then(Value::as_bool)
+        .ok_or_else(uncertain)?;
+    Ok(GuiConnectionCloseResult {
+        flow_id,
+        closed,
+        message: None,
+    })
 }
 
 #[cfg(feature = "tool-dns")]
@@ -1044,3 +1074,7 @@ mod policy_tests;
 #[cfg(test)]
 #[path = "compatibility_tests.rs"]
 mod compatibility_tests;
+
+#[cfg(test)]
+#[path = "flow_close_parsing_tests.rs"]
+mod flow_close_tests;

@@ -8,7 +8,7 @@ test('selected diagnostic tools render independently without starting work', asy
   await page.goto('/?panel=tools', {waitUntil: 'domcontentloaded', timeout: 60_000});
   await expect(page.getByRole('button', {name:'切换主题'})).toBeVisible();
   await expect(page.getByText('域名查询', {exact:true})).toHaveCount(product.features.includes('tool-dns') ? 1 : 0);
-  await expect(page.getByText('路由追踪', {exact:true})).toHaveCount(product.features.includes('tool-route') ? 1 : 0);
+  await expect(page.getByText('路由评估', {exact:true})).toHaveCount(product.features.includes('tool-route') ? 1 : 0);
   await page.setViewportSize({width:390,height:844});
   expect(await page.locator('.diag-panel').evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   expect(errors).toEqual([]);

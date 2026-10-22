@@ -24,6 +24,14 @@ assert.doesNotMatch(editor, /DraggableModal/);
 assert.match(editor, /\$lib\/components\/ui\/dialog/);
 assert.match(editor, /填写后完全覆盖默认 User-Agent/);
 assert.match(editor, /<Dialog\.Body class="grid gap-\[15px\]">/);
+const sourceManager = fs.readFileSync('src/lib/components/configuration/SubscriptionSources.svelte', 'utf8');
+assert.match(sourceManager, /subscriptionUsage\(sub\)/);
+assert.doesNotMatch(sourceManager, /sub\.(?:uploadBytes|downloadBytes) \?\? 0/);
+assert.match(sourceManager, /\{#if usage\.percent!==null\}/);
+assert.match(sourceManager, /来源已用 \{formatBytes\(usage\.used\)\} \/ 总量/);
+assert.doesNotMatch(sourceManager, /disabled=\{busy \|\| !sub\.enabled \|\| Boolean\(sub\.managedSource\)\}/);
+assert.doesNotMatch(sourceManager, /title=\{sub\.lastError\}/);
+
 console.log('subscription contract checks passed');
 
 assert.doesNotMatch(wrapper, /format!\("\{value\} \{CLIENT_USER_AGENT\}"\)/);

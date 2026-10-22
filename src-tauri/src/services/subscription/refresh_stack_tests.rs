@@ -107,6 +107,11 @@ async fn run_fixture() {
                     updated_at_unix_ms: now_unix_ms(),
                     capabilities: Default::default(),
                 };
+                // Conditional material hashes require actual Zero-native schema.
+                zero_config::RuntimeConfig::parse(
+                    &serde_json::to_string(next.content.as_ref().unwrap()).unwrap(),
+                )
+                .unwrap();
                 // Native publication is a double; real source parsing, conditional
                 // downloads, ZRS verification, composition and metadata are exercised.
                 domain_store::save_proxy_configs_to_dir(
@@ -131,7 +136,12 @@ async fn run_fixture() {
                 serde_json::to_value(old_rules).unwrap()
             );
         } else {
-            result.unwrap();
+            result.unwrap_or_else(|error| {
+                panic!(
+                    "fixture cycle {cycle}, publications {}: {error:?}",
+                    publishes.get()
+                )
+            });
             assert_eq!(lock(state.rule_sets(), "rule_set").unwrap().len(), 31);
         }
     }
@@ -218,9 +228,9 @@ fn source(base: &str, cycle: usize) -> Value {
     json!({
         "inbounds":[],
         "outbounds":(0..24).map(|i|json!({"tag":if i==0 {"direct".into()}else{format!("node-{i}")},"protocol":{"type":"direct"}})).collect::<Vec<_>>(),
-        "route":{"final":"direct","rules":(0..31).map(|i|json!({"condition":{"type":"rule_set","tag":if cycle==5 && i==0 {"new-rules".into()}else{format!("rules-{i}")}},"outbound":"direct"})).collect::<Vec<_>>(),
+        "route":{"final":{"type":"route","outbound":"direct"},"rules":(0..31).map(|i|json!({"condition":{"type":"rule_set","tag":if cycle==5 && i==0 {"new-rules".into()}else{format!("rules-{i}")}},"action":{"type":"route","outbound":"direct"}})).collect::<Vec<_>>(),
             "rule_sets":(0..31).map(|i|json!({"tag":if cycle==5 && i==0 {"new-rules".into()}else{format!("rules-{i}")},"type":"url","format":"zrs","url":if cycle==5 && i==0 {format!("{base}/missing")}else{format!("{base}/rule/{i}")}})).collect::<Vec<_>>()},
-        "runtime":{"dns":{"servers":{"alidns":{"type":"doh","host":"223.5.5.5","port":443,"path":"/dns-query","server_name":"dns.alidns.com"}},"default_server":"alidns","answer":{"type":"real"},"policy":{"address_family":"prefer_ipv4"},"cache":{"max_entries":1024}},"fixture_revision":cycle}
+        "runtime":{"dns":{"servers":{"alidns":{"type":"doh","host":"223.5.5.5","port":443,"path":"/dns-query","server_name":"dns.alidns.com"}},"default_server":"alidns","answer":{"type":"real"},"policy":{"address_family":"prefer_ipv4"},"cache":{"max_entries":1024}},"event_log_capacity":1024+cycle}
     })
 }
 fn artifact() -> Vec<u8> {

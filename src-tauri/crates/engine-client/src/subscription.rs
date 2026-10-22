@@ -56,6 +56,17 @@ impl SubscriptionOwner {
             .clone()
     }
 
+    /// Capture the selected endpoint and its cancellation generation together.
+    /// This is a read-only lease; it neither starts nor replaces a listener.
+    pub fn current(&self) -> Option<Subscription> {
+        let selected = self.binding.lock().unwrap_or_else(|e| e.into_inner());
+        selected.as_ref().map(|binding| Subscription {
+            generation: self.generation.load(Ordering::SeqCst),
+            binding: binding.clone(),
+            active: self.generation.clone(),
+        })
+    }
+
     pub fn stop(&self) -> (u64, Option<Binding>) {
         let mut selected = self.binding.lock().unwrap_or_else(|e| e.into_inner());
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;

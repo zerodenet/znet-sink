@@ -33,7 +33,7 @@ test('running TUN settings can be edited and applied without manual toggling', a
   await page.getByRole('button', { name: '保存并应用' }).click();
   await expect(page.getByRole('button', { name: '应用中...' })).toBeDisabled();
   await expect(exclusions).toBeDisabled();
-  await expect(page.getByRole('button', { name: '已保存' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '已应用', exact: true })).toBeEnabled();
   await expect(page.getByLabel('保存结果')).toContainText('203.0.113.10/32');
   await expect(exclusions).toBeEnabled();
 });
@@ -43,7 +43,7 @@ test('apply failure remains visible and does not report saved', async ({ page })
   await page.getByRole('textbox', { name: 'TUN 接管网段' }).fill('203.0.113.10/32');
   await page.getByRole('button', { name: '保存并应用' }).click();
   await expect(page.getByRole('alert')).toContainText('已恢复旧 TUN 配置');
-  await expect(page.getByRole('button', { name: '已保存' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^(已应用|已保存，启动后生效)$/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '保存并应用' })).toBeEnabled();
   await expect(page.getByLabel('保存结果')).toBeEmpty();
 });

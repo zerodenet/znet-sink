@@ -61,6 +61,8 @@ Clash 路由转换支持三段式 `DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD`�
 
 `RULE-SET` 需要可用的 provider 定义及对应本地 ZRS。provider 更新失败时可以继续使用已有的已验证产物；没有可用产物则同步失败。该限制同样适用于 Zero 配置中的嵌套规则集引用。失败信息列出缺失规则集，原有拒绝规则保持不变。
 
+普通订阅支持经来源与材料身份核对的 ETag/Last-Modified 条件请求，304 不重应用配置。`enabled` 控制参与自动同步，关闭后保留材料和条件记录，仍可明确手动同步；`lastSyncAtUnixMs` 是内容检查时间而非额度采样时间。完整边界与测试见 [普通订阅条件同步](ordinary-subscription-conditional-sync-v0.0.3.md)。
+
 ## 同步流程
 
 1. 拉取并按所选格式解码、解析订阅；自定义 User-Agent 完全覆盖默认值。
@@ -86,3 +88,7 @@ Clash 路由转换支持三段式 `DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD`�
 - `lastError`
 
 同步生成的代理配置默认不会自动设为 active；如果已有 `targetProxyConfigId` 且该代理配置原本是 active，则同步后会保持 active 并同步 `localProxy`。
+
+## 移动端周期意图
+
+Android/iOS 原生宿主在冷启动/恢复前台时执行有界到期协调，复用同一普通订阅同步链与 per-ID guard；关闭或后台不会增加排队请求，在途请求以真实返回/持久记录核对。系统后台任务尚未适配，不能保证锁屏/睡眠期间定点执行。恢复记录、未知结果屏障与 304 核对见 [移动前台到期协调](mobile-subscription-foreground-v0.0.3.md)。

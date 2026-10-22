@@ -1,0 +1,28 @@
+import { test, expect } from '@playwright/test';
+test.use({viewport:{width:320,height:720}});
+test('all twenty mobile groups preserve expansion and real selector semantics without global probing',async({page})=>{
+ await page.goto('/?panel=mobile-nodes');
+ const groups=page.locator('article.group').filter({has:page.locator('header')});
+ await expect(groups).toHaveCount(20);
+ await expect(page.getByRole('button',{name:'全部测速',exact:true})).toHaveCount(0);
+ const first=page.locator('#mobile-group-group-0');
+ const auto=page.locator('#mobile-group-group-1');
+ await expect(first.getByRole('list')).toBeVisible();
+ await auto.locator('.group-toggle').click();
+ await expect(auto.getByRole('list')).toBeVisible();await expect(first.getByRole('list')).toBeVisible();
+ await auto.getByRole('button',{name:'查看 node-b',exact:true}).click();
+ await expect(page.getByRole('dialog')).toBeVisible();await expect(page.getByRole('dialog').getByText('未测速',{exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');
+ await first.getByRole('button',{name:'选择 node-b',exact:true}).click();
+ await expect(page.getByLabel('移动节点操作')).toHaveText('select:group-0:node-b');
+ await page.getByLabel('搜索组和节点').fill('group-19');
+ await expect(groups).toHaveCount(1);await expect(groups.getByRole('list')).toBeVisible();
+ await page.getByLabel('搜索组和节点').fill('');
+ await expect(groups).toHaveCount(20);await expect(first.getByRole('list')).toBeVisible();await expect(auto.getByRole('list')).toBeVisible();
+ await expect(page.locator('#mobile-group-group-19').getByRole('list')).toHaveCount(0);
+ await first.getByRole('button',{name:'测速组 group-0',exact:true}).click();
+ await expect(page.getByLabel('移动节点操作')).toHaveText('group:group-0');
+ const dimensions=await first.locator('button').evaluateAll(buttons=>buttons.map(button=>({height:button.getBoundingClientRect().height,width:button.getBoundingClientRect().width})));
+ expect(dimensions.every(button=>button.height>=44 && button.width>=44)).toBeTruthy();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();
+});

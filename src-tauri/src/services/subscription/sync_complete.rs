@@ -12,8 +12,20 @@ pub fn complete_managed_sync_authorized<F>(
 where
     F: Fn() -> AppResult<()>,
 {
-    let (id, owner, revision) = validate(input)?;
     let state = app.state::<AppState>();
+    complete_managed_sync_authorized_state(state.inner(), Some(&app), input, authorize)
+}
+
+pub(crate) fn complete_managed_sync_authorized_state<F>(
+    state: &AppState,
+    app: Option<&AppHandle>,
+    input: ManagedSubscriptionSyncComplete,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()>,
+{
+    let (id, owner, revision) = validate(input)?;
     let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
     authorize()?;
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
@@ -23,13 +35,15 @@ where
         &owner,
         &revision,
         now_unix_ms(),
-        authorize,
-        domain_store::save_subscriptions,
+        &authorize,
+        |next| domain_store::save_subscriptions_authorized(next, &authorize),
     )?;
     *subscriptions = next;
     drop(subscriptions);
     // Persistence is authoritative; an unavailable window cannot undo it.
-    let _ = app.emit("subscriptions:updated", json!({"subscriptionId": id}));
+    if let Some(app) = app {
+        let _ = app.emit("subscriptions:updated", json!({"subscriptionId": id}));
+    }
     Ok(updated)
 }
 

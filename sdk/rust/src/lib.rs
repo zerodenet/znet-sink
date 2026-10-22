@@ -284,6 +284,44 @@ impl Call {
     }
 }
 
+/// Read-only journal facts, not authorization or an automatic replay permit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduledAttemptState {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    Unconfirmed,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledAttempt {
+    pub id: String,
+    pub state: ScheduledAttemptState,
+    pub queued_at_unix_ms: String,
+    pub dispatch_at_unix_ms: Option<String>,
+    pub completed_at_unix_ms: Option<String>,
+    pub observed_at_unix_ms: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledTask {
+    pub plugin_id: String,
+    pub component_id: String,
+    pub task_id: String,
+    pub action: String,
+    pub interval_seconds: u64,
+    pub next_run_unix_ms: u64,
+    #[serde(default)]
+    pub failure_count: u8,
+    #[serde(default)]
+    pub revision: Option<String>,
+    #[serde(default)]
+    pub last_attempt: Option<ScheduledAttempt>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
@@ -425,6 +463,22 @@ impl<T: Transport> Client<T> {
             "self",
             Method::SchedulePut,
             json!({"taskId":task_id,"action":action,"intervalSeconds":interval_seconds}),
+        )
+    }
+    pub fn scheduled_tasks(&self) -> Result<Reply, T::Error> {
+        self.call(
+            Capability::TasksSchedule,
+            "self",
+            Method::ScheduleList,
+            json!({}),
+        )
+    }
+    pub fn delete_scheduled_task(&self, task_id: &str) -> Result<Reply, T::Error> {
+        self.call(
+            Capability::TasksSchedule,
+            "self",
+            Method::ScheduleDelete,
+            json!({"taskId":task_id}),
         )
     }
     pub fn open_browser(&self, origin: &str, url: &str) -> Result<Reply, T::Error> {

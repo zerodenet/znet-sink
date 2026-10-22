@@ -11,7 +11,12 @@ export function samplingSupported(d:TrafficDiscovery|null):boolean {
   return supported(d) && kernelFeatureSupport(d?.capabilities,'traffic_scopes_sampling_v1').state==='supported'
     && !!cap?.automatic_sampling && Number.isSafeInteger(cap.sample_page_size) && cap.sample_page_size > 0 && Number.isSafeInteger(cap.sample_interval_ms) && cap.sample_interval_ms > 0 && Array.isArray(cap.events) && cap.events.includes('stats.scopes_sampled') && cap.events.includes('stats.reset');
 }
+export function hostSupported(d:TrafficDiscovery|null):boolean {
+  return supported(d) && d?.capabilities.trafficStatistics?.host_interface_sampling===true
+    && kernelFeatureSupport(d.capabilities,'traffic_host_interface_statistics_v1').state==='supported';
+}
 export function resetReason(d:TrafficDiscovery|null, row:TrafficSnapshot):string|null {
+  if(row.scope.kind==='host_interface')return '宿主网卡统计只读，不能清空';
   const cap=d?.capabilities.trafficStatistics;
   if(!supported(d)||kernelFeatureSupport(d?.capabilities,'traffic_period_reset_v1').state!=='supported'||cap?.reset_command!=='stats.reset'||cap.reset_permission!=='admin'||cap.reset_policy!=='all_available_cumulative_no_cascade')return '当前内核不支持统计清空';
   if(!d?.admin)return '需要管理员权限';

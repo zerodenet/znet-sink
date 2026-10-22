@@ -10,12 +10,16 @@ pub struct Review {
     pub identity: String,
     pub registration: u64,
     pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_generation: Option<String>,
 }
 #[derive(Serialize)]
 pub struct PermissionView {
     pub request: Request,
     pub required: bool,
     pub supported: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsupported_reason: Option<&'static str>,
     pub granted: bool,
 }
 #[derive(Serialize)]
@@ -47,6 +51,8 @@ pub struct ConfigurationView {
 }
 #[derive(Serialize)]
 pub struct Snapshot {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<super::platform::Snapshot>,
     pub checked: bool,
     pub components: Vec<ComponentView>,
     pub pages: Vec<PageView>,
@@ -70,6 +76,8 @@ pub struct PermissionChangeView {
 
 #[derive(Clone, Serialize)]
 pub struct InstallReview {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_generation: Option<String>,
     pub plugin_id: String,
     pub current_version: Option<String>,
     pub candidate_version: String,

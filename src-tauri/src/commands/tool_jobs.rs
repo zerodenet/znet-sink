@@ -45,11 +45,11 @@ pub fn gui_tool_job_cancel(
     app_handle: AppHandle,
     state: State<'_, AppState>,
     job_id: ToolJobId,
+    expected_scope: Option<crate::client_core::ClientScope>,
+    expected_client_revision: Option<u64>,
 ) -> AppResult<ToolJobSnapshot> {
-    let job = state
-        .tool_runtime()
-        .cancel(job_id, common::now_unix_ms())
-        .ok_or_else(|| AppError::not_found("tool_job", job_id.0.to_string()))?;
+    let job =
+        state.cancel_client_tool_job(job_id, expected_scope.as_ref(), expected_client_revision)?;
     checkpoint(state.inner());
     let _ = app_handle.emit(TOOL_JOB_UPDATED_EVENT, job.clone());
     Ok(job)
@@ -62,11 +62,7 @@ pub fn gui_tool_job_start(
     request: StartToolJobRequest,
 ) -> AppResult<ToolJobSnapshot> {
     require_kind_available(request.kind)?;
-    let job = state.tool_runtime().start(
-        state.client_core_snapshot().scope,
-        request,
-        common::now_unix_ms(),
-    )?;
+    let job = state.start_client_tool_job(request)?;
     if let Err(error) = state.tool_runtime().checkpoint(state.capabilities()) {
         state.tool_runtime().discard(job.id);
         return Err(error);

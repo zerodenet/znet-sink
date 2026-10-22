@@ -15,6 +15,21 @@ const RECORD_BYTES: usize = 64 * 1024;
 const PAGE_BYTES: usize = 512 * 1024;
 static DEBUG_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+pub(crate) fn storage() -> super::local_data::LocalStoreStorage {
+    let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
+    super::local_data::inspect(
+        "capture",
+        data_dir().map(|root| {
+            let paths = segment_paths(&root.join("logs/debug.log.jsonl"));
+            (root, paths)
+        }),
+        Some(SEGMENT_BYTES * (ARCHIVE_COUNT as u64 + 1)),
+        None,
+        None,
+        "segment-rotation",
+    )
+}
+
 fn io_error(error: std::io::Error) -> AppError {
     AppError {
         code: "io_error",
@@ -34,16 +49,25 @@ pub(crate) fn append(frame: &DebugFrame) -> AppResult<()> {
 }
 
 pub(crate) fn clear() -> AppResult<()> {
-    let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
-    clear_path(&debug_path()?)
+    crate::models::debug::with_debug_cleanup(|| {
+        let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
+        clear_path(&debug_path()?)?;
+        crate::models::debug::clear_capture_recovery().map_err(|_| AppError {
+            code: "diagnostic_cleanup_partial",
+            message: "已清理捕获帧；捕获恢复账本清理未确认。日志、连接历史与配置不受影响，请核对账本原操作".into(),
+            details: None,
+        })
+    })
 }
 
 fn clear_path(path: &Path) -> AppResult<()> {
-    for path in segment_paths(path) {
+    let segments = segment_paths(path);
+    let mut removed = 0;
+    for (index, path) in segments.iter().enumerate() {
         match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(io_error(error)),
+            Ok(()) => removed+=1,
+            Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{},
+            Err(_) => return Err(AppError{code:"diagnostic_cleanup_partial",message:format!("捕获清理未完成：已删除{removed}个日志段，剩余范围尚未核对；连接历史和应用日志不受影响"),details:Some(serde_json::json!({"removedSegments":removed,"failedSegmentIndex":index,"unprocessedSegments":segments.len()-index}))}),
         }
     }
     Ok(())

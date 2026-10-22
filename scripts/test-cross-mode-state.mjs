@@ -39,7 +39,17 @@ assert.ok(
     && configService.includes("invoke<SubscriptionSyncAllOutcome>('subscription_sync_all'")
     && configService.includes("reconcileTunAfterConfigMutation('profile activation')")
     && !configService.includes('prepareGuiTunForProfileSwitch'),
-  'profile activation/subscription updates must invalidate config-backed surfaces and reconcile client-owned TUN around source changes',
+  'profile activation/subscription updates must invalidate config-backed surfaces while profile activation retains its capture coordination',
+);
+
+const subscriptionSync = configService.slice(configService.indexOf('export async function syncSubscription('), configService.indexOf('export async function resetSubscriptionConditionalCache('));
+const subscriptionSyncAll = configService.slice(configService.indexOf('export async function syncAllSubscriptions('), configService.indexOf('export async function getSubscriptionRemovalPreview('));
+assert.ok(
+  subscriptionSync.includes("invoke<SubscriptionProfile>('subscription_sync'")
+    && subscriptionSyncAll.includes("invoke<SubscriptionSyncAllOutcome>('subscription_sync_all'")
+    && !subscriptionSync.includes('reconcileTunAfterConfigMutation(')
+    && !subscriptionSyncAll.includes('reconcileTunAfterConfigMutation('),
+  'subscription sync must retain backend-owned capture preservation without another frontend TUN reconcile',
 );
 
 assert.ok(
@@ -51,13 +61,11 @@ assert.ok(
 
 assert.ok(
   configEditor.includes("import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte'")
-    && configEditor.includes('private sourceProfileId: string | null = null')
-    && configEditor.includes('private sourceProfileUpdatedAt: number | null = null')
     && configEditor.includes('proxyConfigSignal.onActiveChanged')
-    && configEditor.includes('reconcileExternalSource()')
-    && configEditor.includes('snapshot.profileId !== this.sourceProfileId')
-    && configEditor.includes('snapshot.sourceUpdatedAtUnixMs !== this.sourceProfileUpdatedAt'),
-  'the singleton Pro config editor must reconcile its source identity instead of retaining a stale profile after Lite switches',
+    && configEditor.includes('reconcileExternalSource()'),
+  // Dirty drafts, opaque binding changes and late results are exercised by
+  // test-config-workspace.mjs; this check only owns cross-mode signal wiring.
+  'the singleton Pro config workspace must subscribe to active-source changes after Lite switches',
 );
 
 assert.ok(
@@ -111,7 +119,10 @@ assert.ok(
     && !appStore.includes("from './gui-state.svelte'")
     && !guiState.includes('async prepareLiteCapture()')
     && !appStore.includes("PRO_ONLY_SETTINGS")
-    && appStore.includes("if (this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;")
+    && appStore.includes("if (!this.mobilePresentation && this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;")
+    && appStore.includes("getGuiInteractionSurfaceSnapshot(this.mobilePresentation ? 'mobile' : 'desktop')")
+    && appStore.includes('openTab(tab: string)')
+    && appStore.includes('returnToPreviousPage()')
     && settingsPanel.includes("section.id !== 'config' && section.id !== 'tun'")
     && settingsPanel.includes("section.id === activeSection"),
   'mode switching must preserve capture state and synchronously apply only the presentation boundary',

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
+  import { endpointTrafficTarget, endpointTrafficUnavailableReason, matchesEndpointTrafficTarget, type EndpointTrafficVisit } from '$lib/features/endpoints/traffic-navigation';
   import { Network, MoreHorizontal, LoaderCircle, RotateCw, Info, ArrowDownToLine, ArrowUpFromLine, Cable, Boxes, Route, Pin, AlertTriangle, MapPin } from '@lucide/svelte';
   import EndpointObservationView from './EndpointObservationView.svelte';
   import EndpointDetailsView from './EndpointDetailsView.svelte';
@@ -6,24 +8,32 @@
   import TrafficScopeDetails from './TrafficScopeDetails.svelte';
   import type { Observation } from '$lib/features/traffic/history';
   import EndpointTrafficChart from './EndpointTrafficChart.svelte';
+  import { store } from '$lib/services/store.svelte';
   import { Button } from '$lib/components/ui/button';
   import { getAppErrorMessage } from '$lib/services/core';
   import * as Dialog from '$lib/components/ui/dialog';
-  import { directionLabel, endpointStateLabel, operationReason, directionRequiresRestart } from '$lib/features/endpoints/policy';
+  import { directionLabel, endpointStateLabel, operationReason, directionRequiresRestart, sourceRestoreReason, restorationUnresolved } from '$lib/features/endpoints/policy';
   import type { EndpointTraffic } from '$lib/features/endpoints/traffic';
-  import type { EndpointAction, EndpointCatalog, EndpointDetails, NetworkEndpoint } from '$lib/features/endpoints/types';
-  let { endpoint, catalog, disabled, onAction, onInspect, details = null, detailsError = null, inspecting = false, traffic, observation, observationAvailable = false, observationStale = false, pending = false, stale = false }: {
+  import type { EndpointAction, EndpointCatalog, EndpointDetails, NetworkEndpoint, RestorationPlan, RestorationReceipt, RestoreMode } from '$lib/features/endpoints/types';
+  let { endpoint, catalog, disabled, onAction, onInspect, details = null, detailsError = null, inspecting = false, traffic, observation, observationAvailable = false, observationStale = false, pending = false, stale = false, onPreviewRestoration, onApplyRestoration, onReconcileRestoration, restoration = null, onTraffic, clientBinding, verifyCurrent, onUserInteraction }: {
+    verifyCurrent?: () => Promise<boolean>; onUserInteraction?: () => void;
+    onTraffic?: (visit: EndpointTrafficVisit) => void; clientBinding?: string;
     endpoint: NetworkEndpoint; catalog: EndpointCatalog; disabled: boolean; details?: EndpointDetails | null; inspecting?: boolean;
     observation?: Observation; observationAvailable?: boolean; observationStale?: boolean;
     traffic?: EndpointTraffic; pending?: boolean; stale?: boolean;
     detailsError?: unknown;
     onAction: (endpoint: NetworkEndpoint, action: EndpointAction) => void;
     onInspect: (endpoint: NetworkEndpoint) => void;
+    onPreviewRestoration?: (endpoint:NetworkEndpoint)=>Promise<RestorationPlan|null>;
+    onApplyRestoration?: (plan:RestorationPlan,mode:RestoreMode)=>Promise<void>;
+    onReconcileRestoration?: ()=>Promise<void>;
+    restoration?: RestorationReceipt|null;
   } = $props();
   let menuOpen = $state(false);
   let menuElement: HTMLDetailsElement | undefined = $state();
   $effect(() => {
     if (!menuOpen) return;
+    onUserInteraction?.();
     const outside = (event: MouseEvent) => { if (event.target instanceof Node && !menuElement?.contains(event.target)) menuOpen = false; };
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') menuOpen = false; };
     window.addEventListener('click', outside);
@@ -31,7 +41,25 @@
     return () => { window.removeEventListener('click', outside); window.removeEventListener('keydown', escape); };
   });
   let detailOpen = $state(false);
+  let alive = $state(true);
+  let returnError = $state<string | null>(null);
+  onDestroy(() => { alive = false; });
+  function openStatistics() {
+    const target = endpointTrafficTarget(catalog.profileId, endpoint);
+    if (!target || !onTraffic) return;
+    const binding = clientBinding;
+    const mode = detailMode;
+    // Portal content must close before the underlying route is hidden.
+    detailOpen = false; menuOpen = false; returnError = null;
+    const isCurrent = () => alive && !stale && binding !== undefined && binding === clientBinding && matchesEndpointTrafficTarget(target, catalog.profileId, endpoint);
+    onTraffic({ target, isCurrent, verifyCurrent: async () => { if (!verifyCurrent) return false; const verified = await verifyCurrent(); return verified && isCurrent(); }, restore: () => {
+      if (!alive) return;
+      if (!isCurrent()) { returnError = '原端点已变化或目录尚未确认，未恢复旧详情；请刷新后重新选择。'; return; }
+      showDetail(mode);
+    } });
+  }
   let detailMode = $state<'protocol' | 'observation'>('protocol');
+  const statisticsReason = $derived(endpointTrafficUnavailableReason(endpoint, stale, clientBinding));
   const stateAction = $derived<EndpointAction>({ operation: 'set_state', enabled: !endpoint.enabled });
   function directionAction(direction: 'inbound' | 'outbound'): EndpointAction {
     return { operation: 'set_directions', directions: { ...endpoint.allowed, [direction]: !endpoint.allowed[direction] } };
@@ -46,11 +74,27 @@
   const inboundReason = $derived(operationReason(catalog, endpoint, directionAction('inbound')));
   const outboundReason = $derived(operationReason(catalog, endpoint, directionAction('outbound')));
   const stateReason = $derived(operationReason(catalog, endpoint, stateAction));
+  const restoreReason = $derived(operationReason(catalog, endpoint, { operation: 'clear_overrides' }));
+  const sourceReason=$derived(sourceRestoreReason(catalog,endpoint));
+  let sourcePlan=$state.raw<RestorationPlan|null>(null);
+  let sourceOpen=$state(false);
+  let sourcePreviewBusy=$state(false);
+  $effect(()=>{if(sourcePlan && (sourcePlan.target.profileId!==catalog.profileId || sourcePlan.target.endpointId!==endpoint.endpoint_id || sourcePlan.target.protocol!==endpoint.protocol || !catalog.restorationTargets?.some(target=>target.bindingId===sourcePlan!.target.bindingId))){sourceOpen=false;sourcePlan=null;}});
+  async function previewSource(){
+    if(!onPreviewRestoration || sourcePreviewBusy)return;
+    menuOpen=false;sourcePreviewBusy=true;
+    try{const plan=await onPreviewRestoration(endpoint);if(plan){sourcePlan=plan;sourceOpen=true;}}
+    finally{sourcePreviewBusy=false;}
+  }
+  function restoreSource(mode:RestoreMode){const retained=sourcePlan;sourceOpen=false;sourcePlan=null;if(retained && onApplyRestoration)void onApplyRestoration(retained,mode);}
+  let restoreOpen = $state(false);
+  let restoreTarget = $state.raw<NetworkEndpoint | null>(null);
   const restartReason = $derived(operationReason(catalog, endpoint, { operation: 'restart' }));
   const addresses = $derived(catalog.configuredAddresses?.[endpoint.endpoint_id] ?? []);
   function count(key: string) { return observationAvailable && observation ? observation.snapshot.activity[key] ?? '—' : endpoint.counters[key] == null ? '—' : String(endpoint.counters[key]); }
   function act(action: EndpointAction) { menuOpen = false; onAction(endpoint, action); }
   function showDetail(mode: 'protocol' | 'observation') {
+    onUserInteraction?.();
     menuOpen = false; detailMode = mode; detailOpen = true;
     if (mode === 'protocol') onInspect(endpoint);
   }
@@ -67,6 +111,11 @@
         <summary aria-label={`${endpoint.tag} 更多操作`} title="更多操作"><MoreHorizontal size={18} /></summary>
         <div class="option-menu">
           <Button variant="ghost" size="sm" disabled={disabled || !!restartReason} aria-label="重启端点" title={restartReason ?? '重启会结束现有连接'} onclick={() => act({ operation: 'restart' })}><RotateCw size={14} />重启端点</Button>
+          <Button variant="ghost" size="sm" disabled={disabled || !!restoreReason} aria-label="清除端点运行覆盖" title={restoreReason ?? '移除运行覆盖，恢复内核当前配置；可能中断连接'} onclick={() => { menuOpen=false; restoreTarget=endpoint; restoreOpen=true; }}><RotateCw size={14} />清除运行覆盖</Button>
+          <Button variant="ghost" size="sm" disabled={pending || sourcePreviewBusy || !!sourceReason || !onPreviewRestoration} aria-label="恢复端点来源" title={sourceReason ?? '只移除此端点客户端覆盖，先预览影响'} onclick={previewSource}><RotateCw size={14}/>{sourcePreviewBusy ? '正在预检' : '恢复来源'}</Button>
+          {#if restoration && restorationUnresolved(restoration) && onReconcileRestoration}<Button variant="ghost" size="sm" disabled={pending} onclick={()=>onReconcileRestoration?.()}>核对原恢复操作</Button>{/if}
+          {#if catalog.localOverrideIds.includes(endpoint.endpoint_id)}<Button variant="ghost" size="sm" aria-label="管理端点客户端配置覆盖" title="工作区中的客户端覆盖需重新预检并应用；清除运行覆盖不会恢复来源" onclick={() => { menuOpen=false; store.openSettings('config'); }}>管理客户端覆盖</Button>{/if}
+          {#if onTraffic}<Button variant="ghost" size="sm" disabled={!!statisticsReason} title={statisticsReason ?? '查看真实登记的统计范围'} onclick={()=>{detailMode="observation";openStatistics();}}>流量统计</Button>{/if}
           <div class="menu-divider"></div>
           <Button variant="ghost" size="sm" disabled={disabled || inspecting || !endpoint.supported.operations.includes('details')} aria-label="协议详情" onclick={() => showDetail('protocol')}><Network size={14} />协议详情</Button>
           <Button variant="ghost" size="sm" aria-label="观测详情" onclick={() => showDetail('observation')}><Info size={14} />观测详情</Button>
@@ -87,6 +136,7 @@
     <span title="当前活动 UDP 流；不统计 WireGuard 外层 UDP 套接字"><Boxes size={13} /><span class="sr-only">数据报 </span><span class="activity-count">{count('active_datagram_flows')}</span></span>
     <span title="当前活动 Packet 路由；— 表示未提供计数，各类计数不合并"><Route size={13} /><span class="sr-only">Packet </span><span class="activity-count">{count('active_packet_routes')}</span></span>
   </div>
+  {#if returnError}<p class="save-note failed" role="status">{returnError}</p>{/if}
   <footer>
     <div class="directions" aria-label="端点方向">
       <button data-slot="surface-button" role="checkbox" aria-checked={endpoint.allowed.inbound} class:active={endpoint.allowed.inbound} aria-label={`${endpoint.tag} 允许入站`} title={inboundReason ?? directionHint('inbound')} disabled={!endpoint.supported.directions.inbound || disabled || !!inboundReason} onclick={() => act(directionAction('inbound'))}><ArrowDownToLine size={14} />入站</button>
@@ -104,9 +154,15 @@
       {:else}
         {#if observationAvailable}{#if observation}<TrafficScopeDetails {observation} stale={stale || observationStale}/>{:else}<p class="save-note">此端点暂无统计快照</p>{/if}{:else}<EndpointObservationView {endpoint} />{/if}
       {/if}
+      {#if onTraffic && statisticsReason}<p class="save-note" role="status">{statisticsReason}</p>{/if}
     </Dialog.Body>
+    {#if onTraffic}<Dialog.Footer><Button disabled={!!statisticsReason} title={statisticsReason ?? '查看真实登记的统计范围'} onclick={openStatistics}>查看此端点统计</Button></Dialog.Footer>{/if}
   </Dialog.Content>
 </Dialog.Root>
+
+<Dialog.Root bind:open={restoreOpen}><Dialog.Content><Dialog.Header><Dialog.Title>清除端点运行覆盖？</Dialog.Title><Dialog.Description>移除 {restoreTarget?.tag} 的运行覆盖并核对内核结果。可能中断连接；来源配置保持。</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => restoreOpen=false}>取消</Button><Button onclick={() => { restoreOpen=false; if (restoreTarget) onAction(restoreTarget, { operation: 'clear_overrides' }); }}>确认恢复</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
+
+<Dialog.Root bind:open={sourceOpen}><Dialog.Content><Dialog.Header><Dialog.Title>恢复端点来源？</Dialog.Title><Dialog.Description>{sourcePlan?.target.tag} · 当前配置 {sourcePlan?.target.profileId}</Dialog.Description></Dialog.Header><Dialog.Body><p class="save-note">{sourcePlan?.impact}</p><p class="save-note">将移除：{sourcePlan?.removedFields.join('、') || '已保存的待应用恢复意图'}。来源配置保持，其他端点和 DNS 覆盖保留。</p>{#if !sourcePlan?.runtimeAvailable}<p class="save-note">运行态或可信回执未就绪，可以保存待应用；不会显示端点运行恢复成功。</p>{/if}</Dialog.Body><Dialog.Footer><Button variant="outline" onclick={()=>sourceOpen=false}>继续保留</Button><Button variant="outline" onclick={()=>restoreSource('save_pending')}>仅保存，待应用</Button><Button disabled={!sourcePlan?.runtimeAvailable} onclick={()=>restoreSource('apply_runtime')}>应用并核对</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
 
 <style>
   .endpoint-card { border:1px solid var(--border); border-radius:12px; padding:18px; background:var(--card); min-width:0; }

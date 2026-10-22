@@ -82,25 +82,45 @@ assert.ok(
   'exit must persist TUN OFF even without an owned child, while storage failure must not abort runtime cleanup',
 );
 
+const exitCoordinator = read('src-tauri/src/application/shutdown.rs');
+const nativeExit = appRuntime.slice(appRuntime.indexOf('shutdown::complete_final_exit('), appRuntime.indexOf('if let tauri::RunEvent::ExitRequested'));
+const requestedExit = appRuntime.slice(appRuntime.indexOf('if let tauri::RunEvent::ExitRequested'));
+for (const path of [nativeExit, requestedExit]) {
+  assert.ok(
+    path.includes('shutdown::prepare(app_handle)')
+      && path.indexOf('shutdown::prepare(app_handle)') < path.indexOf('shutdown::drain_plugins(plugin_executor).await')
+      && path.indexOf('shutdown::drain_plugins(plugin_executor).await') < path.indexOf('core_process::shutdown_managed_runtime('),
+    'both native and requested exits must seal and drain plugin entry points before runtime teardown',
+  );
+}
+assert.ok(
+  exitCoordinator.indexOf('shutting_down_handle().store(true') < exitCoordinator.indexOf('close_page_documents()')
+    && exitCoordinator.indexOf('close_page_documents()') < exitCoordinator.indexOf('executor.close(std::time::Duration::ZERO)'),
+  'shutdown preparation must block watchdogs, close trusted page channels, and seal new guest calls synchronously',
+);
+
 const connectionWorkspace = read('src/lib/components/tabs/ConnectionInspectorWorkspace.svelte');
 const coreStatusCard = read('src/lib/components/core/CoreStatusCard.svelte');
-const closeAllBody = connectionWorkspace.slice(
-  connectionWorkspace.indexOf('async function closeAllConnections()'),
-  connectionWorkspace.indexOf('function requestCloseAllConnections()'),
-);
+const flowCloseOwner = read('src-tauri/src/services/flow_close.rs');
+const flowCloseClient = read('src/lib/features/flow-close/client.ts');
 assert.ok(
-  connectionWorkspace.includes('closeAllSnapshotIds = [...new Set(liveView.map(')
-    && closeAllBody.includes('const ids = [...closeAllSnapshotIds];')
-    && !closeAllBody.includes('liveView.map(')
-    && closeAllBody.indexOf('closeAllConfirm = false;') < closeAllBody.indexOf('closingAll = true;'),
-  'close-all must freeze the confirmation-time flow IDs and dismiss the dialog before processing them',
+  connectionWorkspace.includes("closeWorkspace?.begin('list')")
+    && connectionWorkspace.includes("closeWorkspace?.begin('legacy-row')")
+    && !connectionWorkspace.includes('Promise.allSettled')
+    && !connectionWorkspace.includes('guiCloseConnection(')
+    && !connectionWorkspace.includes('await closeFlow(')
+    && flowCloseClient.includes('gui_flow_close_preview')
+    && flowCloseClient.includes('gui_flow_close_submit')
+    && flowCloseOwner.includes('subscription: Subscription')
+    && flowCloseOwner.includes('t.flow_id == request.flow_id && t.target_key == request.target_key'),
+  'connection controls must use host-owned canonical selection and a fixed original plan, without fulfilled counting or low-level fallback',
 );
 
 const connectionDrawer = read('src/lib/components/ConnectionDetailsDrawer.svelte');
 assert.ok(
   connectionWorkspace.includes('void store.refreshInteractionSurface();')
     && connectionWorkspace.includes("{#if connection.origin === 'active'}")
-    && connectionWorkspace.includes('disabled={!canCloseConnections || terminatingIds.has(connection.flowId)}')
+    && connectionWorkspace.includes('disabled={!canCloseConnections}')
     && connectionWorkspace.includes('terminateUnavailableReason={closeUnavailableReason}')
     && !connectionWorkspace.includes('group-hover:opacity-100')
     && connectionDrawer.includes("{#if connection.origin === 'active'}")

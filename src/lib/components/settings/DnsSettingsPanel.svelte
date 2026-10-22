@@ -1,10 +1,24 @@
 <script lang="ts">
+  import DnsServerMigrationDialog from './DnsServerMigrationDialog.svelte';
+  import type { DnsMigrationMode } from '$lib/features/dns-migration/types';
+  import { migrationFailure } from '$lib/features/dns-migration/state';
+  import { optionalMobileNavigation } from '$lib/features/mobile/context';
+  import { untrack } from 'svelte';
+  const dnsNavigation=untrack(()=>optionalMobileNavigation());
+  let migrationMode=$state<DnsMigrationMode>('delete'),migrationSavedMode=$state<DnsMigrationMode>('delete');
+  let migrationOpen=$state(false),migrationRequestedName=$state<string|null>(null),migrationBusy=$state(false),migrationUnknown=$state(false),migrationPending=$state(false),migrationNeedsReload=$state(false);
+  function migrationState(value:{busy:boolean;unknown:boolean;mode:DnsMigrationMode}){migrationBusy=value.busy;migrationUnknown=value.unknown;if(value.unknown)migrationMode=value.mode;}
+  async function migrationSaved(mode:DnsMigrationMode){migrationSavedMode=mode;migrationPending=true;migrationNeedsReload=true;const loaded=await load();if(alive){migrationNeedsReload=!loaded;saved=false;savedPending=true;}}
+  async function rereadMigration(){const loaded=await load();if(alive)migrationNeedsReload=!loaded;}
+  async function discardForMigration(){discardDraft();await load();}
+  function migrationWorkspace(){if(saving||migrationBusy||migrationUnknown)return;if(dnsNavigation)dnsNavigation.open('workspace');else{store.settingsSection='config';store.activeTab='settings';}}
+
   import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
   let profileSnapshot = $state<ProfileSettings | null>(null);
   async function loadGlobalDnsSettings() {
-    profileSnapshot = await getProfileSettings();
-    const source = profileSnapshot.settings.dns;
-    return {source, draft: readDnsSettings(source)};
+    const profile = await getProfileSettings();
+    const source = profile.settings.dns;
+    return {profile, source, draft: readDnsSettings(source)};
   }
   async function applyGlobalDnsSettings(source: DnsSettingsInput, draft: DnsSettingsDraft) {
     if (!profileSnapshot) throw new Error('请先读取当前配置');
@@ -12,19 +26,22 @@
     if (issues.length) throw new Error(issues.map(issue => issue.message).join('；'));
     const next = projectDnsSettings(source, draft);
     profileSnapshot = await saveProfileSettings(profileSnapshot, {dns: next});
+    savedPending = profileSnapshot.applied === false;
     return profileSnapshot.settings.dns;
   }
   async function restoreDnsSource() {
     if (!profileSnapshot || saving) return;
     saving = true;
-    try { profileSnapshot = await restoreProfileSettings(profileSnapshot, 'dns'); await load(); }
+    try { const next = await restoreProfileSettings(profileSnapshot, 'dns'); if (alive) { profileSnapshot = next; source = next.settings.dns; acceptDraft(readDnsSettings(source)); } }
     catch (cause) {error = getAppErrorMessage(cause, '恢复 DNS 配置失败');}
     finally {saving = false;}
   }
 
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { Textarea } from '$lib/components/ui/textarea';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import MobileSettingsDraftGuard from '$lib/components/mobile/MobileSettingsDraftGuard.svelte';
+  import { settingsDraftKey, captureSettingsDraftRead, canAcceptSettingsDraftRead } from '$lib/features/mobile/settings-draft';
   import { AlertTriangle, Braces, ChevronDown, ChevronUp, FileDiff, Pencil, Plus, RefreshCw, RotateCcw, Save, Server, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import ErrorRecoveryActions from '$lib/components/core/ErrorRecoveryActions.svelte';
@@ -105,6 +122,22 @@
   let effectiveError = $state('');
   let effectiveInspection = $state<DnsEffectiveConfigInspection | null>(null);
   let automaticAddressFamilyPolicy = $state<DnsAddressFamilyPolicy>('prefer_ipv4');
+  let acceptedDraft = $state.raw<DnsSettingsDraft | null>(null);
+  let readNotice = $state<string | null>(null);
+  let alive = true, readGeneration = 0, ruleSetReadGeneration = 0;
+  const dirty = $derived(draft !== null && settingsDraftKey(draft) !== settingsDraftKey(acceptedDraft));
+  function acceptDraft(next: DnsSettingsDraft) {
+    draft = cloneDnsValue(next); acceptedDraft = cloneDnsValue(next);
+    nativeJson = JSON.stringify(next.dns, null, 2); readNotice = null;
+  }
+  function discardDraft() {
+    if (acceptedDraft) draft = cloneDnsValue(acceptedDraft);
+    nativeJson = draft ? JSON.stringify(draft.dns, null, 2) : '';
+    jsonDialogOpen = false; serverDialogOpen = false; dispatchDialogOpen = false;
+    error = ''; errorCode = undefined; nativeError = ''; saved = false; savedPending = false; readNotice = null;
+  }
+  onDestroy(() => { alive = false; readGeneration++; });
+
 
   const ruleSetTags = $derived(new Set(ruleSetOptions.map((option) => option.tag)));
   const routeTargetTags = $derived(new Set(routeTargetOptions.map((option) => option.tag)));
@@ -405,6 +438,9 @@
   }
 
   async function load() {
+    const generation = ++readGeneration;
+    const ruleGeneration = ++ruleSetReadGeneration;
+    const read = captureSettingsDraftRead(acceptedDraft, draft);
     loading = true;
     ruleSetReferenceError = '';
     error = '';
@@ -414,12 +450,17 @@
         loadGlobalDnsSettings(),
         getDnsKernelCompatibility(),
         getGuiTunStatus().catch(() => null),
-        getEffectiveRuleSetOptions().catch((cause) => {
-          ruleSetReferenceError = getAppErrorMessage(cause, '读取规则集引用失败');
-          return null;
-        }),
+        getEffectiveRuleSetOptions().then(
+          options => ({ options, error: '' }),
+          cause => ({ options: null, error: getAppErrorMessage(cause, '读取规则集引用失败') }),
+        ),
         Promise.all([getConfigProxyNodes(), getConfigPolicyGroups()]).catch(() => null),
       ]);
+      if (!alive || generation !== readGeneration) return false;
+      if (!canAcceptSettingsDraftRead(read, acceptedDraft, draft)) {
+        readNotice = '来源已刷新，未覆盖未保存草稿；请继续编辑或明确放弃。';
+        return false;
+      }
       automaticAddressFamilyPolicy = recommendedDnsAddressFamily(
         tunStatus?.ipv4Egress.availability ?? 'unknown',
         tunStatus?.ipv6Egress.availability ?? 'unknown',
@@ -433,11 +474,14 @@
               { features: kernelCompatibility.features, addressFamily: automaticAddressFamilyPolicy },
             ),
           };
+      profileSnapshot = result.profile;
       source = result.source;
-      draft = nextDraft;
+      acceptDraft(nextDraft);
       compatibility = kernelCompatibility;
-      ruleSetReferencesKnown = effectiveRuleSets !== null;
-      ruleSetOptions = effectiveRuleSets ?? [];
+      ruleSetReferencesKnown = ruleGeneration === ruleSetReadGeneration && effectiveRuleSets.options !== null;
+      ruleSetOptions = ruleSetReferencesKnown ? effectiveRuleSets.options! : [];
+      ruleSetReferenceError = ruleGeneration === ruleSetReadGeneration
+        ? effectiveRuleSets.error : '读取期间规则集或来源已变化，请重新核对引用。';
       routeTargetsKnown = configTargets !== null;
       routeTargetOptions = configTargets ? dnsRouteTargetOptions(...configTargets) : [];
       jsonDialogOpen = false;
@@ -445,12 +489,15 @@
       nativeError = '';
       saved = false;
       savedPending = false;
+      return true;
     } catch (cause) {
+      if (!alive || generation !== readGeneration) return false;
       const info = getAppErrorInfo(cause, '加载 DNS 配置失败');
       errorCode = info.code;
       error = getAppErrorMessage(cause, info.message);
+      return false;
     } finally {
-      loading = false;
+      if (alive && generation === readGeneration) loading = false;
     }
   }
 
@@ -472,14 +519,34 @@
   }
 
   async function refreshRuleSetReferences() {
+    const generation = readGeneration;
+    const profile = profileSnapshot;
+    const request = ++ruleSetReadGeneration;
+    const current = () => alive && generation === readGeneration
+      && profile === profileSnapshot && request === ruleSetReadGeneration;
     try {
-      ruleSetOptions = await getEffectiveRuleSetOptions();
+      const options = await getEffectiveRuleSetOptions();
+      if (!current()) return;
+      ruleSetOptions = options;
       ruleSetReferencesKnown = true;
       ruleSetReferenceError = '';
     } catch (cause) {
+      if (!current()) return;
+      ruleSetReferencesKnown = false;
       ruleSetReferenceError = getAppErrorMessage(cause, '读取规则集引用失败');
-      // Keep the last known options visible; save still performs kernel validation.
+      // Cached options stay visible as history; a failed read cannot prove deletion.
     }
+  }
+
+  function manageRuleSets() {
+    if (dnsNavigation) {
+      const sourceKey = dnsNavigation.current?.key;
+      dnsNavigation.open('rules');
+      // A denied dirty/busy transition keeps its editor and original draft.
+      if (dnsNavigation.current?.key !== sourceKey) {
+        serverDialogOpen = false; dispatchDialogOpen = false; jsonDialogOpen = false;
+      }
+    } else store.openTab('rules');
   }
 
   function resetToAutomaticDefault() {
@@ -716,33 +783,17 @@
   }
 
   function removeServer(name: string) {
-    if (!draft) return;
-    if (Object.keys(draft.dns.servers).length === 1) {
-      error = '至少保留一个 DNS 服务器';
-      return;
-    }
-    if (draft.dns.dispatch.some((rule) => rule.server === name)) {
-      error = `服务器“${name}”仍被分流规则引用，请先修改或删除对应规则`;
-      return;
-    }
-    const policy = draft.dns.policy;
-    const policyReferences = [
-      policy?.node_server,
-      policy?.direct_server,
-      ...(policy?.fallback_servers ?? []),
-      ...(policy?.node_fallback_servers ?? []),
-      ...(policy?.direct_fallback_servers ?? []),
-      ...(policy?.server_timeout_ms && Object.hasOwn(policy.server_timeout_ms, name) ? [name] : []),
-    ];
-    if (policyReferences.includes(name)) {
-      error = `服务器“${name}”仍被解析策略引用，请先调整主服务器、回退链或单独超时`;
-      return;
-    }
-    delete draft.dns.servers[name];
-    if (draft.dns.default_server === name) {
-      draft.dns.default_server = Object.keys(draft.dns.servers)[0] ?? '';
-    }
-    touch();
+    if (!draft || saving || migrationBusy) return;
+    migrationRequestedName = name;
+    migrationMode = 'delete';
+    migrationOpen = true;
+  }
+
+  function renameServer(name: string) {
+    if (!draft || saving || migrationBusy) return;
+    migrationRequestedName = name;
+    migrationMode = 'rename';
+    migrationOpen = true;
   }
 
   function openAddDispatch() {
@@ -825,7 +876,7 @@
   }
 
   async function save() {
-    if (!draft || !source || saving) return;
+    if (!draft || !source || saving || loading || migrationBusy || migrationUnknown || migrationNeedsReload) return;
     saving = true;
     saved = false;
     savedPending = false;
@@ -833,20 +884,23 @@
     errorCode = undefined;
     nativeError = '';
     try {
-      const nextDraft = draft;
+      const submittedKey = settingsDraftKey(draft);
+      const nextDraft = cloneDnsValue(draft);
       if (nextDraft.mode === 'fake_ip' && compatibility.status === 'unsupported') {
         throw new Error("当前内核不支持此 DNS 设置，请先更新内核后再应用");
 
       } else {
         source = await applyGlobalDnsSettings(source, nextDraft);
       }
-      draft = nextDraft;
-      nativeJson = JSON.stringify(nextDraft.dns, null, 2);
-      saved = true;
+      if (!alive) return;
+      const confirmedDraft = readDnsSettings(source);
+      acceptedDraft = cloneDnsValue(confirmedDraft);
+      if (settingsDraftKey(draft) === submittedKey) acceptDraft(confirmedDraft);
+      saved = settingsDraftKey(draft) === settingsDraftKey(acceptedDraft);
     } catch (cause) {
       const info = getAppErrorInfo(cause, '保存 DNS 配置失败，已保留上次可用配置');
       errorCode = info.code;
-      error = getAppErrorMessage(cause, info.message);
+      error = info.code === 'dns_migration_preview_required' ? migrationFailure(cause) : getAppErrorMessage(cause, info.message);
     } finally {
       saving = false;
     }
@@ -857,6 +911,13 @@
     return ruleSetSignal.onChanged(() => void refreshRuleSetReferences());
   });
 </script>
+<MobileSettingsDraftGuard {dirty} busy={saving||migrationBusy} label="DNS 设置" onDiscard={discardDraft} />
+{#if readNotice}<p role="status">{readNotice}</p>{/if}
+<DnsServerMigrationDialog open={migrationOpen} profileId={profileSnapshot?.profileId??null} requestedName={migrationRequestedName} requestedMode={migrationMode} {dirty} onClose={()=>migrationOpen=false} onDiscard={discardForMigration} onSaved={mode=>void migrationSaved(mode)} onStateChange={migrationState}/>
+{#if migrationUnknown}<p role="status">原 DNS 迁移保存结果未确认；当前编辑与普通保存已暂停，不能创建新计划或重放。</p><Button variant="outline" onclick={()=>migrationOpen=true}>{migrationMode==='rename'?'核对原 DNS 重命名迁移':'核对原 DNS 删除迁移'}</Button>{/if}
+{#if migrationPending}<p role="status">{migrationSavedMode==='rename'?'DNS 重命名及全部引用迁移已保存本地，待应用；全局客户端覆盖影响全部配置，运行状态尚未确认。':'DNS 删除及引用迁移已保存本地，待应用；全局客户端覆盖影响全部配置，运行状态尚未确认。'}</p><Button variant="outline" disabled={saving||migrationBusy||migrationUnknown} onclick={migrationWorkspace}>前往工作区预检/应用 DNS 变更</Button>{/if}
+{#if migrationNeedsReload}<p role="status">迁移已保存本地，但 DNS 表单尚未完成重新读取；原展示不恢复普通保存权限。</p><Button variant="outline" disabled={loading||saving||migrationBusy||migrationUnknown} onclick={()=>void rereadMigration()}>重新读取 DNS 本地结果</Button>{/if}
+<fieldset class="dns-editor" disabled={saving||migrationBusy||migrationUnknown||migrationNeedsReload}>
 <div class="flex items-center justify-between gap-3 mb-3 text-xs text-muted-foreground">
   <span>{isLocallyEdited(profileSnapshot, 'dns') ? '客户端设置 · 全局生效' : '来自配置 · 缺失项使用默认值'}</span>
   <Button variant="outline" size="sm" onclick={restoreDnsSource} disabled={saving || !isLocallyEdited(profileSnapshot, 'dns')}>恢复配置值</Button>
@@ -883,7 +944,7 @@
   <div class="load-error" role="alert">
     <AlertTriangle />
     <span>{error}</span>
-    <ErrorRecoveryActions code={errorCode} context="dns" onretry={load} />
+    <ErrorRecoveryActions code={errorCode} context="dns" onretry={async()=>{await load();}} />
   </div>
 {:else if draft}
   {#if compatibility.status === 'unsupported' && draft.mode === 'fake_ip'}
@@ -934,7 +995,7 @@
     <div class="issues warning" role="status">
       <div>规则集引用暂未确认：{ruleSetReferenceError}</div>
       <div class="inline-actions">
-        <Button variant="outline" size="sm" onclick={() => store.openTab('rules')}>管理规则集</Button>
+        <Button variant="outline" size="sm" onclick={manageRuleSets}>管理规则集</Button>
         <Button variant="ghost" size="sm" onclick={refreshRuleSetReferences}>重试读取</Button>
       </div>
     </div>
@@ -943,7 +1004,7 @@
     <div class="issues error" role="alert">
       <div>以下 DNS 分流引用已失效：{danglingRuleTags.join('、')}。请选择现有规则集或删除对应分流。</div>
       <div class="inline-actions">
-        <Button variant="outline" size="sm" onclick={() => store.openTab('rules')}>管理规则集</Button>
+        <Button variant="outline" size="sm" onclick={manageRuleSets}>管理规则集</Button>
         <Button variant="ghost" size="sm" onclick={refreshRuleSetReferences}>刷新引用</Button>
       </div>
     </div>
@@ -1124,6 +1185,7 @@
             </div>
             <div class="server-actions">
               <Button variant="ghost" size="icon-sm" onclick={() => openEditServer(name)} aria-label={`编辑 ${name}`}><Pencil /></Button>
+              <Button variant="ghost" size="sm" onclick={() => renameServer(name)} aria-label={`重命名 ${name}`}>重命名</Button>
               <Button variant="ghost" size="icon-sm" onclick={() => removeServer(name)} aria-label={`删除 ${name}`}><Trash2 /></Button>
             </div>
           </article>
@@ -1218,6 +1280,7 @@
   <div class="actions"><Button onclick={save} disabled={saving || errors.length > 0}><Save />{saving ? '保存并应用中…' : saved ? savedPending ? '已保存，待内核' : '已保存' : '保存并应用'}</Button></div>
 {/if}
 
+</fieldset>
 <Dialog.Root bind:open={serverDialogOpen}>
   <Dialog.Content class="sm:max-w-[560px]">
     <form
@@ -1236,6 +1299,7 @@
           <label>
             <span>服务器名称</span>
             <Input bind:value={serverNameDraft} placeholder="例如 cloudflare" autofocus />
+            {#if editingServerName && serverNameDraft.trim() !== editingServerName}<span role="status">名称变更仅保留为草稿。删除或重命名需专用预览，原材料保留；请取消本编辑窗口后，使用服务器行的“重命名”入口核对全部引用。普通保存会明确拒绝此改名。</span>{/if}
           </label>
           <label>
             <span>协议</span>
@@ -1400,14 +1464,14 @@
                     </Select.Content>
                   </Select.Root>
                   <small>可选活动配置和客户端管理的已就绪规则集；DNS 引用不依赖公共路由规则开关。</small>
-                  <Button type="button" variant="outline" size="sm" onclick={() => store.openTab('rules')}>管理规则集</Button>
+                  <Button type="button" variant="outline" size="sm" onclick={manageRuleSets}>管理规则集</Button>
                   {#if ruleSetReferencesKnown && dispatchConditionTagDraft && !ruleSetTags.has(dispatchConditionTagDraft)}
                     <div class="reference-warning">当前引用 {dispatchConditionTagDraft} 已失效，请重新选择。</div>
                   {/if}
                 {:else}
                   <div class="empty-reference">
                     <span>{ruleSetReferencesKnown ? '暂无可用规则集，请在规则页添加或更新规则资源。' : '规则集列表暂未读取成功，现有引用尚未确认。'}</span>
-                    <Button type="button" variant="outline" size="sm" onclick={() => store.openTab('rules')}>前往规则页</Button>
+                    <Button type="button" variant="outline" size="sm" onclick={manageRuleSets}>前往规则页</Button>
                   </div>
                 {/if}
               </label>
@@ -1521,6 +1585,7 @@
 </Dialog.Root>
 
 <style>
+  .dns-editor { min-width:0; margin:0; padding:0; border:0; }
   .panel-head,
   .section-head,
   .head-actions,
@@ -1829,6 +1894,8 @@
 
   .server-actions {
     flex: none;
+    flex-wrap: wrap;
+    max-width: 148px;
     gap: 2px;
   }
 

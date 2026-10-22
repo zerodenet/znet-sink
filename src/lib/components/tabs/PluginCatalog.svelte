@@ -154,7 +154,8 @@
       const snapshot = await pluginApi.installRelease(
         selected.id,
         tag,
-        review.requires_approval ? review.candidate_digest : undefined,
+        review.requires_approval || review.host_generation ? review.candidate_digest : undefined,
+        review.host_generation,
       );
       if (alive) oninstalled(snapshot, review);
     } catch (reason) {

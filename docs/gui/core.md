@@ -1,5 +1,22 @@
 # 内核接入
 
+## 客户端任务与诊断补充（v0.0.3）
+
+`gui_client_core_snapshot` 另提供 `scopeGeneration`：客户端配置提交与内核生命周期
+的单调代次；普通观测更新只推进 `revision`。工具新界面按原 `expectedScope` 与
+`expectedClientRevision` 请求入队/停止，后端在同一客户端锁下比较；旧记录仅作历史，
+不能因 A→B→A 重新获得当前结果资格。这不是 Zero wire 的远端原子前置条件。
+详见[工具任务边界](tool-job-scope-v0.0.3.md)。
+
+`gui_export_diagnostics` 现在必须接收 `planId`，仅允许桌面宿主主窗口消费
+`native_document_preview_diagnostics` 生成的原 v3 固定计划，写出单个
+`diagnostics.json`，返回原 `directory/files/createdAtUnixMs`。不再递归复制原始日志，
+也不提供没有预览的旧调用回退。用途、2MiB、五分钟、scopeGeneration及单次交付
+继续由共享诊断服务核对；IO结果未知不重放。`gui_discard_diagnostics` 只释放对应
+未提交预览，不撤回已发出的IO。日志当前筛选的复制/系统保存分享使用
+`log_export_preview/deliver/discard`，具体[固定日志边界](filtered-log-export-v0.0.3.md)
+列出省略内容和单次计划语义。上述范围均不证明移动 VPN 已装配。
+
 内核接入分三层：
 
 - GUI 应用层：内核路径、配置路径、socket、启动参数解析。

@@ -1,13 +1,15 @@
 #[path = "subscription.rs"]
 mod original;
 
-pub(crate) use original::remove_plugin_owned;
 #[cfg(test)]
 pub(crate) use original::{
     apply_managed_to_acceptance_store, complete_managed_sync_in_acceptance_store,
-    remove_managed_from_acceptance_store, update_managed_metadata_in_acceptance_store,
+    remove_managed_from_acceptance_store, should_publish_sync_error,
+    update_managed_metadata_in_acceptance_store,
 };
-pub use original::{ParsedSubscriptionConfig, SyncAllOutcome};
+pub use original::{
+    reset_conditional_cache, ConditionalCacheReset, ParsedSubscriptionConfig, SyncAllOutcome,
+};
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
@@ -193,6 +195,23 @@ pub async fn sync(app_handle: AppHandle, id: String) -> AppResult<SubscriptionPr
     original::sync(app_handle, id).await.map(present_profile)
 }
 
+/// Scheduling consumes the same canonical stored formats as manual sync.
+pub(crate) fn scheduled_profiles(state: &AppState) -> AppResult<Vec<SubscriptionProfile>> {
+    migrate_profiles(state)?;
+    Ok(lock(state.subscriptions(), "subscription")?.clone())
+}
+
+/// Host-only foreground entry; execution and per-ID deduplication stay shared.
+pub(crate) async fn sync_due(
+    app_handle: AppHandle,
+    expected: SubscriptionProfile,
+) -> AppResult<Option<SubscriptionProfile>> {
+    // The selected snapshot comes from the stored domain, not UI presentation.
+    original::sync_due(app_handle, expected)
+        .await
+        .map(|profile| profile.map(present_profile))
+}
+
 pub async fn sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {
     {
         let state = app_handle.state::<AppState>();
@@ -223,6 +242,69 @@ where
     original::apply_managed_authorized(app_handle, input, authorize)
         .await
         .map(present_profile)
+}
+
+pub(crate) async fn apply_managed_authorized_state<F>(
+    state: &AppState,
+    app: Option<AppHandle>,
+    mut input: ManagedSubscriptionApply,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    input.format = storage_format(Some(&input.format));
+    original::apply_managed_authorized_state(state, app, input, authorize)
+        .await
+        .map(present_profile)
+}
+
+pub(crate) fn update_managed_metadata_authorized_state<F>(
+    state: &AppState,
+    app: Option<&AppHandle>,
+    input: ManagedSubscriptionMetadataUpdate,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()>,
+{
+    original::update_managed_metadata_authorized_state(state, app, input, authorize)
+        .map(present_profile)
+}
+
+pub(crate) fn complete_managed_sync_authorized_state<F>(
+    state: &AppState,
+    app: Option<&AppHandle>,
+    input: ManagedSubscriptionSyncComplete,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()>,
+{
+    original::complete_managed_sync_authorized_state(state, app, input, authorize)
+        .map(present_profile)
+}
+
+pub(crate) async fn remove_managed_authorized_state<F>(
+    state: &AppState,
+    app: Option<AppHandle>,
+    id: String,
+    remove_associated_config: bool,
+    plugin_id: String,
+    authorize: F,
+) -> AppResult<SubscriptionRemovalOutcome>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    original::remove_managed_authorized_state(
+        state,
+        app,
+        id,
+        remove_associated_config,
+        plugin_id,
+        authorize,
+    )
+    .await
 }
 
 pub fn update_managed_metadata_authorized<F>(

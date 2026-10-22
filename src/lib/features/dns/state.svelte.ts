@@ -1,6 +1,7 @@
 import type { DnsCacheResult, DnsLookupResult, FakeIpLookupResult } from '$lib/types/diagnostics';
 import type { GuiFakeIpClearResult, ToolJobSnapshot } from '$lib/types/gui-api';
 import { ToolJobsState, type ToolJobPorts } from '$lib/features/tool-jobs/state.svelte';
+import { parseDnsCache, cacheCompatibilityError } from './cache-result';
 
 interface Ports extends ToolJobPorts {
   getAppErrorMessage(error: unknown, fallback?: string): string;
@@ -24,6 +25,9 @@ export class DnsState {
   fakeDirection = $state<'domain' | 'ip'>('domain');
   fakeResult = $state<FakeIpLookupResult | null>(null);
   cacheResult = $state<DnsCacheResult | null>(null);
+  cacheDomain = $state('');
+  cacheLimit = $state(50);
+  cacheError = $state<string | null>(null);
   fakeMessage = $state<string | null>(null);
   fakeError = $state<string | null>(null);
   readonly jobs: ToolJobsState;
@@ -32,6 +36,7 @@ export class DnsState {
   private dnsStarting = $state(false);
   private fakeStarting = $state(false);
   private clearStarting = $state(false);
+  private cacheStarting = $state(false);
 
   constructor(ports: Ports) {
     this.ports = ports;
@@ -39,8 +44,22 @@ export class DnsState {
       ['dns_lookup', 'dns_cache', 'fake_ip_lookup', 'fake_ip_clear'],
       ports,
       (job) => this.applyJob(job),
+      () => this.invalidateResults(),
     );
     void this.jobs.init();
+  }
+
+  private invalidateResults(): void {
+    this.dnsResult = null;
+    this.dnsError = null;
+    this.fakeResult = null;
+    this.cacheResult = null;
+    this.cacheError = null;
+    this.fakeMessage = null;
+    this.fakeError = null;
+    this.dnsStarting = this.fakeStarting = this.clearStarting = false;
+    this.cacheStarting = false;
+    this.refreshedClearJobs.clear();
   }
 
   get dnsLoading(): boolean {
@@ -48,8 +67,23 @@ export class DnsState {
   }
 
   get fakeLoading(): boolean {
-    return this.fakeStarting || this.jobs.active('fake_ip_lookup').length > 0
-      || this.jobs.active('dns_cache').length > 0;
+    return this.fakeStarting || this.jobs.active('fake_ip_lookup').length > 0;
+  }
+  get cacheLoading(): boolean { return this.cacheStarting || this.jobs.active('dns_cache').length > 0; }
+
+  async runCache(): Promise<void> {
+    if (!this.jobs.ready || this.jobs.disposed || this.cacheLoading) return;
+    if (!Number.isInteger(this.cacheLimit) || this.cacheLimit < 1 || this.cacheLimit > 500) {
+      this.cacheError = '缓存读取上限必须为1–500整数'; return;
+    }
+    this.cacheError = null; this.cacheResult = null; this.cacheStarting = true;
+    const epoch = this.jobs.epoch;
+    try {
+      const domain = this.cacheDomain.trim();
+      await this.jobs.start({kind:'dns_cache',params:{...(domain ? {domain} : {}),limit:this.cacheLimit}});
+    } catch(error) {
+      if (!this.jobs.disposed && epoch === this.jobs.epoch) this.cacheError = this.ports.getAppErrorMessage(error, 'DNS 缓存读取未完成');
+    } finally { if (epoch === this.jobs.epoch) this.cacheStarting = false; }
   }
 
   get fakeClearLoading(): boolean {
@@ -63,43 +97,45 @@ export class DnsState {
   }
 
   async runDns(): Promise<void> {
+    if (!this.jobs.ready || this.jobs.disposed) return;
     const hostname = this.dnsHost.trim();
     if (!hostname || this.dnsLoading) return;
     this.dnsError = null;
     this.dnsResult = null;
     this.dnsStarting = true;
+    const epoch = this.jobs.epoch;
     try {
       await this.jobs.start({ kind: 'dns_lookup', params: { hostname } });
     } catch (error) {
-      this.dnsError = this.ports.getAppErrorMessage(error, 'DNS 查询任务启动失败');
+      if (!this.jobs.disposed && epoch === this.jobs.epoch) this.dnsError = this.ports.getAppErrorMessage(error, 'DNS 查询任务启动失败');
     } finally {
-      this.dnsStarting = false;
+      if (epoch === this.jobs.epoch) this.dnsStarting = false;
     }
   }
 
   async runFakeIp(): Promise<void> {
+    if (!this.jobs.ready || this.jobs.disposed) return;
     const query = this.fakeQuery.trim();
     if (!query || this.fakeLoading || this.fakeClearLoading) return;
     this.fakeError = null;
     this.fakeMessage = null;
     this.fakeResult = null;
     this.fakeStarting = true;
+    const epoch = this.jobs.epoch;
     try {
-      await Promise.all([
-        this.jobs.start({
+      await this.jobs.start({
           kind: 'fake_ip_lookup',
           params: this.fakeDirection === 'domain' ? { domain: query } : { ip: query },
-        }),
-        this.jobs.start({ kind: 'dns_cache', params: { limit: 50 } }),
-      ]);
+        });
     } catch (error) {
-      this.fakeError = this.ports.getAppErrorMessage(error, 'Fake-IP 诊断任务启动失败');
+      if (!this.jobs.disposed && epoch === this.jobs.epoch) this.fakeError = this.ports.getAppErrorMessage(error, 'Fake-IP 诊断任务启动失败');
     } finally {
-      this.fakeStarting = false;
+      if (epoch === this.jobs.epoch) this.fakeStarting = false;
     }
   }
 
   async clearFakeIp(scope: 'selected' | 'all'): Promise<void> {
+    if (!this.jobs.ready || this.jobs.disposed) return;
     if (this.fakeClearLoading || this.fakeLoading) return;
     const query = this.fakeQuery.trim();
     if (scope === 'selected' && !query) {
@@ -111,6 +147,7 @@ export class DnsState {
     this.fakeError = null;
     this.fakeMessage = null;
     this.clearStarting = true;
+    const epoch = this.jobs.epoch;
     try {
       await this.jobs.start({
         kind: 'fake_ip_clear',
@@ -121,17 +158,24 @@ export class DnsState {
             : { ip: query },
       });
     } catch (error) {
-      this.fakeError = this.ports.getAppErrorMessage(error, 'Fake-IP 清理任务启动失败');
+      if (!this.jobs.disposed && epoch === this.jobs.epoch) this.fakeError = this.ports.getAppErrorMessage(error, 'Fake-IP 清理任务启动失败');
     } finally {
-      this.clearStarting = false;
+      if (epoch === this.jobs.epoch) this.clearStarting = false;
     }
   }
 
   async cancel(jobId: number): Promise<void> {
+    const epoch = this.jobs.epoch;
+    const kind = this.jobs.jobs.get(jobId)?.kind;
     try {
       await this.jobs.cancel(jobId);
     } catch (error) {
-      this.fakeError = this.ports.getAppErrorMessage(error, '取消诊断任务失败');
+      if (!this.jobs.disposed && epoch === this.jobs.epoch) {
+        const message = this.ports.getAppErrorMessage(error, '取消诊断任务失败');
+        if (kind === 'dns_cache') this.cacheError = message;
+        else if (kind === 'dns_lookup') this.dnsError = message;
+        else this.fakeError = message;
+      }
     }
   }
 
@@ -147,8 +191,10 @@ export class DnsState {
       return;
     }
     if (job.kind === 'dns_cache') {
-      if (job.state === 'completed') this.cacheResult = job.result as DnsCacheResult;
-      else this.fakeError = terminalMessage(job, 'DNS 缓存读取失败');
+      if (job.state === 'completed') {
+        try { this.cacheResult = parseDnsCache(job.result); this.cacheError = null; }
+        catch { this.cacheResult = null; this.cacheError = cacheCompatibilityError; }
+      } else this.cacheError = terminalMessage(job, 'DNS 缓存读取失败');
       return;
     }
     if (job.kind === 'fake_ip_lookup') {
@@ -169,8 +215,9 @@ export class DnsState {
         this.fakeResult = null;
         if (!this.refreshedClearJobs.has(job.id)) {
           this.refreshedClearJobs.add(job.id);
-          void this.jobs.start({ kind: 'dns_cache', params: { limit: 50 } }).catch((error) => {
-            this.fakeError = this.ports.getAppErrorMessage(error, 'DNS 缓存读取任务启动失败');
+          const epoch = this.jobs.epoch;
+          void this.jobs.start({ kind: 'dns_cache', params: { limit: 50 }, expectedScope: job.scope }).catch((error) => {
+            if (!this.jobs.disposed && epoch === this.jobs.epoch) this.fakeError = this.ports.getAppErrorMessage(error, 'DNS 缓存读取任务启动失败');
           });
         }
       } else {

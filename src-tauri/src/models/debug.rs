@@ -2,9 +2,15 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
+mod telemetry;
+pub(crate) use telemetry::DebugTelemetry;
+
 mod capture;
-pub use capture::CaptureStatus;
-pub(crate) use capture::{capture_payload, capture_status, set_capture};
+pub(crate) use capture::{
+    capture_payload, capture_request, capture_status, clear_capture_recovery,
+    initialize_capture_recovery, invalidate_capture_scope, set_capture,
+};
+pub use capture::{CaptureRequest, CaptureStatus};
 
 mod worker;
 
@@ -23,6 +29,10 @@ pub struct DebugFrame {
     pub frame_type: String,
     /// The JSON payload (may be truncated for large responses).
     pub payload: serde_json::Value,
+    /// Host-assigned semantic provenance, never read from request/reply payload metadata.
+    /// Old persisted records have no provenance and cannot export payload facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) telemetry: Option<DebugTelemetry>,
     /// Elapsed ms since the matching request (response frames only).
     pub elapsed_ms: Option<u64>,
     /// Error string if the request failed.
@@ -96,6 +106,9 @@ pub(crate) fn push_debug_frame(mut frame: DebugFrame) {
         Some(worker) => worker.submit(frame).err(),
         None => Some(frame),
     };
+    if rejected.is_some() {
+        capture::queue_loss();
+    }
     if rejected
         .as_ref()
         .is_some_and(crate::services::connection_history_store::is_completed_connection_frame)
@@ -105,12 +118,17 @@ pub(crate) fn push_debug_frame(mut frame: DebugFrame) {
 }
 
 fn persist_debug_frame(persisted: DebugFrame, dropped: u64) {
+    let (persisted, admitted) = capture::prepare_for_storage(persisted);
     if dropped > 0 {
         crate::services::file_logger::line(&format!(
             "debug capture skipped {dropped} frames because its bounded worker was unavailable or busy"
         ));
     }
-    let _ = crate::services::debug_store::append(&persisted);
+    let written = capture::storage_current(&persisted)
+        && crate::services::debug_store::append(&persisted).is_ok();
+    if let Some((id, bytes)) = admitted {
+        capture::record_written(&id, bytes, written);
+    }
     if crate::services::connection_history_store::append_if_completed(&persisted).is_err() {
         crate::services::connection_history_store::record_write_failure();
     }
@@ -121,7 +139,23 @@ fn persist_debug_frame(persisted: DebugFrame, dropped: u64) {
 }
 
 // Retained for callers that clear diagnostics; there is no duplicated memory ring.
-pub(crate) fn clear_debug_frames() {}
+pub(crate) fn clear_debug_frames() -> crate::errors::AppResult<()> {
+    drain_debug_frames()
+}
+pub(crate) fn drain_debug_frames() -> crate::errors::AppResult<()> {
+    with_debug_cleanup(|| Ok(()))
+}
+pub(crate) fn with_debug_cleanup<T>(
+    work: impl FnOnce() -> crate::errors::AppResult<T>,
+) -> crate::errors::AppResult<T> {
+    let _guard = capture::begin_cleanup()?;
+    if let Some(Some(worker)) = DEBUG_WORKER.get() {
+        worker.flush().map_err(|_| {
+            crate::errors::AppError::internal("捕获写入未结束，不能清理，请重新核对")
+        })?;
+    }
+    work()
+}
 
 pub(crate) fn seed_next_debug_frame_id(next_id: u64) {
     let mut current = DEBUG_FRAME_ID.load(Ordering::SeqCst);

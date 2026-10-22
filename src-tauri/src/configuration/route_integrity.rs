@@ -5,9 +5,8 @@ use std::collections::BTreeSet;
 /// Missing policy dependencies are errors; deleting their rules changes the
 /// user's routing policy (including reject rules) into a different policy.
 pub(crate) fn validate(config: &Value) -> AppResult<()> {
-    let Some(route) = config.get("route") else {
-        return Ok(());
-    };
+    let empty = Value::Null;
+    let route = config.get("route").unwrap_or(&empty);
     let defined: BTreeSet<_> = route
         .get("rule_sets")
         .and_then(Value::as_array)
@@ -18,6 +17,24 @@ pub(crate) fn validate(config: &Value) -> AppResult<()> {
     let mut missing = BTreeSet::new();
     for rule in route
         .get("rules")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(condition) = rule.get("condition") {
+            inspect(condition, &defined, &mut missing);
+        }
+    }
+    for condition in route
+        .get("bypass")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        inspect(condition, &defined, &mut missing);
+    }
+    for rule in config
+        .pointer("/runtime/dns/dispatch")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()

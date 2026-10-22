@@ -1,4 +1,18 @@
 import { expect, test } from '@playwright/test';
+test('unified catalog local editor preserves host text and saves without activation', async ({ page }) => {
+  await page.goto('/?panel=profiles&mode=unified&fixture=profile-editor');
+  await page.getByRole('article', { name: '配置 日常网络配置', exact: true }).getByRole('button', { name: '编辑配置', exact: true }).click();
+  const body = page.getByLabel('配置 JSON 原文');
+  await expect(body).toHaveValue(/18446744073709551615/);
+  const original = await body.inputValue();
+  await page.getByLabel('配置名称', { exact: true }).fill('无损编辑配置');
+  await page.getByRole('button', { name: '仅保存本地配置', exact: true }).click();
+  await expect(page.getByRole('article', { name: '配置 无损编辑配置', exact: true })).toBeVisible();
+  const calls = await page.evaluate(() => (window as any).profileEditorFixture.calls);
+  expect(calls.filter((call: any) => call.kind === 'save')).toHaveLength(1);
+  expect(calls.find((call: any) => call.kind === 'save').input.sourceJson).toBe(original);
+  expect(calls.filter((call: any) => call.kind === 'activate')).toHaveLength(0);
+});
 for (const mode of ['unified-lite','unified-pro']) {
   test(`${mode}: shared sources have one configuration, unsynced sources remain actionable`, async ({page}) => {
     await page.goto(`/?panel=profiles&mode=${mode}`);

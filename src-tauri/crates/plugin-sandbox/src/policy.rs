@@ -10,6 +10,7 @@ use znet_client_core::capability::{self, Budget, Manager, Permission, Policy};
 #[derive(Clone)]
 pub struct Authority {
     digest: String,
+    registration: u64,
     policy: Policy,
 }
 impl Authority {
@@ -43,7 +44,22 @@ impl Authority {
                 &ceiling,
             )
             .map_err(map_error)?;
+        let registration = manager
+            .component_snapshots()
+            .into_iter()
+            .find(|snapshot| {
+                snapshot.key
+                    == format!(
+                        "{}/{}",
+                        component.manifest.plugin_id, component.manifest.component_id
+                    )
+                    && snapshot.identity == component.digest
+                    && !snapshot.retired
+            })
+            .ok_or(Error::Revoked)?
+            .registration;
         Ok(Self {
+            registration,
             digest: component.digest.clone(),
             policy,
         })
@@ -71,6 +87,48 @@ impl Authority {
         timeout: Duration,
         resource_bytes: usize,
     ) -> Result<Lease, Error> {
+        self.begin_host_call_inner(
+            component,
+            timeout,
+            resource_bytes,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+    }
+    /// Host-validated original material registration, consent revision and
+    /// document cancellation; no grant is reacquired from the latest snapshot.
+    pub fn begin_host_call_at_revision(
+        &self,
+        component: &Component,
+        registration: u64,
+        revision: u64,
+        timeout: Duration,
+        resource_bytes: usize,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<Lease, Error> {
+        self.check_registration(registration)?;
+        self.begin_host_call_inner(
+            component,
+            timeout,
+            resource_bytes,
+            cancelled,
+            Some(revision),
+        )
+    }
+    fn check_registration(&self, registration: u64) -> Result<(), Error> {
+        if self.registration != registration {
+            return Err(Error::Revoked);
+        }
+        Ok(())
+    }
+    fn begin_host_call_inner(
+        &self,
+        component: &Component,
+        timeout: Duration,
+        resource_bytes: usize,
+        cancelled: Arc<AtomicBool>,
+        revision: Option<u64>,
+    ) -> Result<Lease, Error> {
         if component.digest != self.digest
             || timeout.is_zero()
             || timeout > Duration::from_secs(120)
@@ -80,14 +138,14 @@ impl Authority {
             return Err(Error::BudgetExceeded);
         }
         let inner = self
-            .policy
-            .begin(
+            .begin_policy(
                 Budget {
                     calls: 1,
                     resource_bytes,
                     timeout,
                 },
-                Arc::new(AtomicBool::new(false)),
+                cancelled,
+                revision,
             )
             .map_err(map_error)?;
         Ok(Lease { inner })
@@ -105,17 +163,67 @@ impl Authority {
             return Err(Error::DigestMismatch);
         }
         let inner = self
-            .policy
-            .begin(
+            .begin_policy(
                 Budget {
                     calls: component.manifest.limits.max_calls,
                     resource_bytes: 8 * 1024 * 1024,
                     timeout: Duration::from_secs(120),
                 },
                 cancelled,
+                None,
             )
             .map_err(map_error)?;
         Ok(Lease { inner })
+    }
+    /// Queue waiting has a separate bound; activation retains the original
+    /// consent epoch and original ordinary/scheduled execution wall budget.
+    pub(crate) fn begin_worker(
+        &self,
+        component: &Component,
+        cancelled: Arc<AtomicBool>,
+        scheduled: bool,
+        reviewed: Option<(u64, u64)>,
+    ) -> Result<Lease, Error> {
+        if let Some((registration, _)) = reviewed {
+            self.check_registration(registration)?;
+        }
+        if component.digest != self.digest {
+            return Err(Error::DigestMismatch);
+        }
+        let limits = &component.manifest.limits;
+        let inner = self
+            .policy
+            .begin_queued(
+                Budget {
+                    calls: limits.max_calls,
+                    resource_bytes: if scheduled {
+                        8 * 1024 * 1024
+                    } else {
+                        limits.output_bytes
+                    },
+                    timeout: if scheduled {
+                        Duration::from_secs(120)
+                    } else {
+                        Duration::from_millis(limits.timeout_ms)
+                    },
+                },
+                cancelled,
+                reviewed.map(|(_, revision)| revision),
+                crate::runtime::QUEUE_WAIT_LIMIT,
+            )
+            .map_err(map_error)?;
+        Ok(Lease { inner })
+    }
+    fn begin_policy(
+        &self,
+        budget: Budget,
+        cancelled: Arc<AtomicBool>,
+        revision: Option<u64>,
+    ) -> Result<capability::Lease, capability::Error> {
+        match revision {
+            Some(revision) => self.policy.begin_at_revision(budget, cancelled, revision),
+            None => self.policy.begin(budget, cancelled),
+        }
     }
     pub(crate) fn begin_cancelled(
         &self,
@@ -127,14 +235,14 @@ impl Authority {
         }
         let limits = &component.manifest.limits;
         let inner = self
-            .policy
-            .begin(
+            .begin_policy(
                 Budget {
                     calls: limits.max_calls,
                     resource_bytes: limits.output_bytes,
                     timeout: Duration::from_millis(limits.timeout_ms),
                 },
                 cancelled,
+                None,
             )
             .map_err(map_error)?;
         Ok(Lease { inner })

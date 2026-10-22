@@ -1,4 +1,6 @@
-//! Desktop component owner. Verified material only; guest IO stays in capability executors.
+//! Component owner. Verified material only; guest IO stays in capability executors.
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod background;
 mod callback;
 mod configuration;
 mod discovery;
@@ -6,17 +8,26 @@ mod io;
 mod local_state;
 mod model;
 pub(crate) mod namespace;
+pub(crate) mod native_install;
+#[cfg(any(debug_assertions, test))]
+mod native_smoke;
 pub(crate) mod notification;
 mod operations;
+pub(crate) mod page_channel;
+mod platform;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) use platform::{recheck_native, resume_native, shutdown_native, suspend_native};
 mod scheduler;
 pub(crate) mod sdk;
 mod sensitive;
+pub(crate) mod uninstall;
 mod vault;
 use crate::errors::{AppError, AppResult};
 use base64::{engine::general_purpose::STANDARD, Engine};
 pub use model::{
     ComponentView, InstallReview, PageView, PermissionChangeView, PermissionView, Review, Snapshot,
 };
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) use scheduler::spawn as spawn_scheduler;
 use sha2::{Digest, Sha256};
 use std::{
@@ -42,12 +53,20 @@ pub struct Host {
     root: Option<std::path::PathBuf>,
     // Serialize installation/catalog changes, never held during VM execution.
     operation: Mutex<()>,
+    executor: Mutex<znet_plugin_sandbox::runtime::Executor>,
+    platform: platform::Context,
     restore: Mutex<()>,
     state: Mutex<State>,
     notification_times: Mutex<BTreeMap<String, std::collections::VecDeque<u64>>>,
     log_times: Mutex<BTreeMap<String, std::collections::VecDeque<u64>>>,
     callbacks: callback::Store,
     sensitive: sensitive::Store,
+    page_documents: page_channel::Store,
+    uninstalls: uninstall::Owner,
+    native_installs: native_install::Plans,
+    startup_dispatched: std::sync::atomic::AtomicBool,
+    native_vault: Mutex<Option<vault::KeyReader>>,
+    scheduler: Arc<scheduler::Owner>,
 }
 #[derive(Default)]
 struct State {
@@ -57,6 +76,7 @@ struct State {
     notices: Vec<String>,
 }
 struct Loaded {
+    installation_generation: u64,
     component: Arc<Component>,
     authority: Option<Authority>,
     name: String,
@@ -78,9 +98,6 @@ fn publisher_fingerprint(registration: &Registration) -> AppResult<String> {
         .decode(&registration.publisher.public_key)
         .map_err(io::failure)?;
     Ok(format!("{:x}", Sha256::digest(key)))
-}
-fn supported(request: &Request) -> bool {
-    request.capability.accepts_scope(&request.scope)
 }
 fn permission(request: &Request) -> Permission {
     Permission::new(request.capability.as_str(), &request.scope)
@@ -108,6 +125,10 @@ fn ensure_newer(store: &Store, registration: &Registration, candidate: &str) -> 
     Ok(())
 }
 impl Host {
+    fn supported(&self, request: &Request) -> bool {
+        request.capability.accepts_scope(&request.scope)
+            && self.platform.unsupported_reason(request).is_none()
+    }
     fn root(&self) -> AppResult<PathBuf> {
         #[cfg(test)]
         if let Some(root) = &self.root {
@@ -123,6 +144,7 @@ impl Host {
         let state = self.state.lock().unwrap();
         let policies = manager.component_snapshots();
         Snapshot {
+            platform: self.platform.snapshot(),
             checked: state.directory.is_some(),
             notices: state.notices.clone(),
             pages: state
@@ -172,6 +194,7 @@ impl Host {
                             identity: p.identity.clone(),
                             registration: p.registration,
                             revision: p.revision,
+                            host_generation: self.platform.review_generation(),
                         }),
                         permissions: manifest
                             .required
@@ -180,7 +203,8 @@ impl Host {
                             .map(|request| PermissionView {
                                 request: request.clone(),
                                 required: manifest.required.contains(request),
-                                supported: supported(request),
+                                supported: self.supported(request),
+                                unsupported_reason: self.platform.unsupported_reason(request),
                                 granted: loaded.consent.grants.contains(request),
                             })
                             .collect(),
@@ -195,6 +219,19 @@ impl Host {
         }
     }
     fn restore_cached(&self, manager: &Manager) {
+        // A verified in-memory catalog needs no disk reservation. In-flight
+        // native SDK IO may hold that reservation and must not freeze readers.
+        if self.state.lock().unwrap().directory.is_some() {
+            return;
+        }
+        let Ok(root) = self.root() else {
+            return;
+        };
+        // Reserve before restore mutex: normal operations call snapshot while
+        // holding the root guard, so reverse ordering could deadlock.
+        let Ok(_root_guard) = uninstall::storage::RootGuard::acquire(&root) else {
+            return;
+        };
         let _restore = self.restore.lock().unwrap();
         if self.state.lock().unwrap().directory.is_some() {
             return;
@@ -208,11 +245,13 @@ impl Host {
         let Ok(Some(directory)) = local_state::effective_directory(&root, directory) else {
             return;
         };
-        self.state.lock().unwrap().directory = Some(directory);
         let Ok(store) = self.store() else {
             return;
         };
-        let _ = self.rescan(manager, &store);
+        self.state.lock().unwrap().directory = Some(directory);
+        if self.rescan(manager, &store).is_err() {
+            self.retire_loaded(manager);
+        }
     }
     fn retire_loaded(&self, manager: &Manager) {
         let mut state = self.state.lock().unwrap();
@@ -247,12 +286,18 @@ impl Host {
         let mut next_pages = BTreeMap::new();
         let mut notices = Vec::new();
         for id in ids {
+            if self.uninstall_available(&id).is_err() {
+                notices.push("原插件卸载尚未解决，组件保持停用；请查看卸载记录".into());
+                continue;
+            }
             let package = directory.find(&id).and_then(|registration| {
                 store
-                    .current(registration)
-                    .map(|package| (registration, package))
+                    .review_uninstall(registration)
+                    .map(|(review, package)| {
+                        (registration, review.installation_generation, package)
+                    })
             });
-            let (registration, package) = match package {
+            let (registration, installation_generation, package) = match package {
                 Ok(value) => value,
                 Err(_) => {
                     notices.push(format!(
@@ -274,6 +319,13 @@ impl Host {
             for component in package.components {
                 let manifest = component.manifest();
                 let key = format!("{}/{}", manifest.plugin_id, manifest.component_id);
+                if state
+                    .loaded
+                    .get(&key)
+                    .is_some_and(|l| l.installation_generation != installation_generation)
+                {
+                    manager.remove_component(&key);
+                }
                 let configuration = configuration::values(&self.root()?, &key)?;
                 let declaration: BTreeSet<_> = manifest
                     .required
@@ -301,19 +353,22 @@ impl Host {
                 let must_suspend = permission_expanded || (consent.enabled && required_unapproved);
                 let blocked = if component
                     .compatible(
-                        &Target::native_desktop().map_err(io::failure)?,
+                        &self.platform.target()?,
                         env!("CARGO_PKG_VERSION"),
                         Isolation::Vm,
                     )
                     .is_err()
                 {
                     Some("此组件不支持当前设备、客户端版本或运行方式".into())
-                } else if manifest.required.iter().any(|r| !supported(r)) {
+                } else if let Some(reason) = self.platform.execution_restriction() {
+                    Some(reason.into())
+                } else if manifest.required.iter().any(|r| !self.supported(r)) {
                     Some("此组件需要客户端尚未开放的权限".into())
                 } else {
                     None
                 };
                 let mut loaded = Loaded {
+                    installation_generation,
                     component: Arc::new(component),
                     authority: None,
                     name: registration.name.chars().take(128).collect(),
@@ -410,6 +465,9 @@ impl Host {
         manager: &Manager,
         review: &Review,
     ) -> AppResult<znet_client_core::capability::ComponentSnapshot> {
+        if review.host_generation != self.platform.review_generation() {
+            return Err(stale());
+        }
         manager
             .component_snapshots()
             .into_iter()

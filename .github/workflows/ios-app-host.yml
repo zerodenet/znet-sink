@@ -1,0 +1,109 @@
+name: iOS complete application host
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main, feat/mobile-v0.0.3]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: znet-ios-application-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator-application:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
+    name: Complete iOS App (simulator, no signing identity)
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ios-complete-simulator
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - name: Verify host generation and negative artifact contracts
+        run: pnpm test:ios-host
+      - name: Locate Xcode and standard Tauri generator dependencies
+        shell: bash
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          command -v xcodegen || brew install xcodegen
+          command -v pod || brew install cocoapods
+          xcrun simctl list runtimes
+      - name: Generate and build the complete main application without signing credentials
+        env:
+          ZNET_IOS_EVIDENCE_DIR: ${{ github.workspace }}/ios-host-evidence/simulator
+        run: bash scripts/build-ios-host.sh 'simulator'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-complete-simulator-evidence
+          path: ios-host-evidence/
+          if-no-files-found: warn
+          retention-days: 7
+  device-application:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
+    name: Complete iOS App (device, no signing identity)
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ios-complete-device
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - name: Verify host generation and negative artifact contracts
+        run: pnpm test:ios-host
+      - name: Locate Xcode and standard Tauri generator dependencies
+        shell: bash
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          command -v xcodegen || brew install xcodegen
+          command -v pod || brew install cocoapods
+          xcrun simctl list runtimes
+      - name: Generate and build the complete main application without signing credentials
+        env:
+          ZNET_IOS_EVIDENCE_DIR: ${{ github.workspace }}/ios-host-evidence/device
+        run: bash scripts/build-ios-host.sh 'device'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-complete-device-evidence
+          path: ios-host-evidence/
+          if-no-files-found: warn
+          retention-days: 7

@@ -11,6 +11,7 @@ const base = (tag: string, protocol: string): NetworkEndpoint => ({
   counters:{inner_rx_bytes:null,inner_tx_bytes:null,outer_rx_bytes:null,outer_tx_bytes:null,active_packet_routes:null,active_stream_flows:0,active_datagram_flows:2},last_error:null,
 });
 let endpoints=[base('wg-a','wireguard'),base('mesh-b','future_mesh')];
+window.addEventListener('fixture-endpoint-remove', () => { endpoints = endpoints.filter(row => row.tag !== 'wg-a'); });
 if (params().has('legacy-role-stats')) endpoints=endpoints.map(row=>({...row,configuration:{origin:'legacy'},endpoint_id:`opaque-role/${row.tag}`,inbound_tags:[],allowed:{inbound:false,outbound:true},effective:{inbound:false,outbound:true},counters:{...row.counters,active_stream_flows:0,active_datagram_flows:0,active_packet_routes:null}}));
 if (params().has('long-details')) {
   endpoints[0].inbound_tags = ['endpoint/' + 'long-resource-name-'.repeat(8)];
@@ -39,6 +40,10 @@ function observeTraffic() {
 // This fixture models the client overlay, never a kernel source-file save.
 const localOverrides: Record<string, {enabled?:boolean;directions?:NetworkEndpoint['allowed']}> = {};
 let readState={delay:0,catalogError:false,detailsError:false};
+let holdCatalog = false;
+let releaseCatalog: (()=>void) | undefined;
+window.addEventListener('fixture-endpoint-hold-read',()=>{holdCatalog=true;});
+window.addEventListener('fixture-endpoint-release-read',()=>{holdCatalog=false;releaseCatalog?.();releaseCatalog=undefined;});
 let showAddresses=true;
 window.addEventListener('fixture-endpoint-read-state',event=>{
   readState={...readState,...(event as CustomEvent<typeof readState>).detail};
@@ -63,6 +68,7 @@ window.addEventListener('fixture-reload-config', () => {
 export const endpointGateway: EndpointGateway = {
   async catalog(): Promise<EndpointCatalog> {
     window.dispatchEvent(new Event('fixture-endpoint-catalog-read'));
+    if(holdCatalog)await new Promise<void>(resolve=>{releaseCatalog=resolve;window.dispatchEvent(new Event('fixture-endpoint-held'));});
     if(readState.delay)await new Promise(resolve=>setTimeout(resolve,readState.delay));
     if(readState.catalogError)throw {code:'connection_closed',message:'端点目录连接中断。'.repeat(20)};
     if (params().has('slow-observation')) await new Promise(resolve => setTimeout(resolve, 250));
@@ -72,7 +78,8 @@ export const endpointGateway: EndpointGateway = {
     capabilities.features=['network_endpoint_catalog_v1','network_endpoint_control_v1',...(params().has('old-preconditions')?[]:['network_endpoint_control_preconditions_v1'])];
     capabilities.globalLimitations=[params().has('old-control') ? 'endpoint_live_direction_contraction_requires_stop' : 'endpoint_live_outbound_direction_contraction_requires_stop'];
     if (params().has('observe-only')) endpoints.forEach(row => { row.supported.operations=['list','get','details']; });
-    return {capabilities,endpoints:structuredClone(endpoints),profileId:'profile-a',editableEndpointIds:params().has('unowned')?[]:endpoints.map(row=>row.endpoint_id),localOverrideIds:Object.keys(localOverrides),configuredAddresses:{[endpoints[0].endpoint_id]:showAddresses?['10.66.0.2/32','fd66:1234:5678:90ab::2/128']:[]}};
+    window.dispatchEvent(new Event('fixture-endpoint-catalog-complete'));
+    return {capabilities,endpoints:structuredClone(endpoints),profileId:'profile-a',editableEndpointIds:params().has('unowned')?[]:endpoints.map(row=>row.endpoint_id),localOverrideIds:Object.keys(localOverrides),configuredAddresses:Object.fromEntries(endpoints.filter(row=>row.tag==='wg-a').map(row=>[row.endpoint_id,showAddresses?['10.66.0.2/32','fd66:1234:5678:90ab::2/128']:[]]))};
   },
   async control(input) {
     window.dispatchEvent(new CustomEvent('fixture-save',{detail:input}));

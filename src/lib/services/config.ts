@@ -126,6 +126,117 @@ export async function syncSubscription(id: string): Promise<SubscriptionProfile>
   return subscription;
 }
 
+export async function resetSubscriptionConditionalCache(id:string,expectedUpdatedAtUnixMs:number):Promise<{cleared:boolean}>{
+  if(!id || !Number.isSafeInteger(expectedUpdatedAtUnixMs) || expectedUpdatedAtUnixMs<0)throw new Error('来源版本无法确认，请刷新后重新预览。');
+  const result=await invoke<{cleared:boolean}>('subscription_reset_conditional_cache',{id,expectedUpdatedAtUnixMs:String(expectedUpdatedAtUnixMs)});
+  if(typeof result?.cleared!=='boolean')throw new Error('条件记录清理回执未确认，请先核对。');
+  return result;
+}
+
+export interface SubscriptionReconciliation {
+  status: 'result-unknown' | 'local-publication-pending';
+  source: { id: string; updatedAtUnixMs: string; lastSyncAtUnixMs: string | null };
+  material: {
+    status: 'saved-valid' | 'saved-invalid' | 'missing' | 'not-linked' | 'ownership-mismatch';
+    profileId: string | null; updatedAtUnixMs: string | null; active: boolean | null;
+    validation: 'native-schema-only' | 'not-available' | 'not-inspected';
+  };
+  evidence: { candidate: 'not-recorded' | 'recorded'; receipt: 'not-recorded' | 'confirmed' };
+  runtime: {
+    status: 'readable' | 'unavailable' | 'changed' | 'unsupported';
+    coreInstanceId: string | null; configRevision: string | null;
+    reasonCode: string; reason: string;
+  };
+  canResolve: boolean;
+  recoveryId: string | null;
+  reason: string;
+}
+
+function isU64Decimal(value: unknown): value is string {
+  return typeof value === 'string' && /^(0|[1-9][0-9]*)$/.test(value)
+    && value.length <= 20 && BigInt(value) <= 18446744073709551615n;
+}
+
+/** Read-only result inspection. Never reloads profiles or reconciles TUN. */
+export async function reconcileUnknownSubscription(
+  id: string, expectedUpdatedAtUnixMs: number, expectedTargetProfileId: string | null,
+): Promise<SubscriptionReconciliation> {
+  const fail = () => new Error('订阅结果核对回执未确认，请刷新后重试。');
+  if (!id || id.trim() !== id || !Number.isSafeInteger(expectedUpdatedAtUnixMs) || expectedUpdatedAtUnixMs < 0
+    || !(expectedTargetProfileId === null || (typeof expectedTargetProfileId === 'string' && expectedTargetProfileId.length > 0))) {
+    throw new Error('来源版本或关联目标无法确认，请刷新后重新核对。');
+  }
+  const result = await invoke<SubscriptionReconciliation>('subscription_reconcile_unknown', {
+    id, expectedUpdatedAtUnixMs: String(expectedUpdatedAtUnixMs),
+  });
+  if (!result || typeof result.canResolve !== 'boolean'
+    || result.status !== (result.canResolve ? 'local-publication-pending' : 'result-unknown')
+    || !(result.recoveryId === null || isRecoveryId(result.recoveryId))
+    || result.source?.id !== id || result.source.updatedAtUnixMs !== String(expectedUpdatedAtUnixMs)
+    || !isU64Decimal(result.source.updatedAtUnixMs)
+    || !(result.source.lastSyncAtUnixMs === null || isU64Decimal(result.source.lastSyncAtUnixMs))
+    || !['not-recorded', 'recorded'].includes(result.evidence?.candidate)
+    || !['not-recorded', 'confirmed'].includes(result.evidence?.receipt)
+    || (result.evidence.receipt === 'confirmed' && result.evidence.candidate !== 'recorded')
+    || (result.evidence.candidate === 'recorded') !== (result.recoveryId !== null)
+    || typeof result.reason !== 'string' || !result.reason
+    || !result.material || result.material.profileId !== expectedTargetProfileId
+    || !['saved-valid', 'saved-invalid', 'missing', 'not-linked', 'ownership-mismatch'].includes(result.material.status)
+    || !result.runtime || !['readable', 'unavailable', 'changed', 'unsupported'].includes(result.runtime.status)
+    || typeof result.runtime.reason !== 'string' || !result.runtime.reason) {
+    throw fail();
+  }
+  const material = result.material;
+  if (material.status === 'not-linked' || material.status === 'missing') {
+    if (material.updatedAtUnixMs !== null || material.active !== null || material.validation !== 'not-available'
+      || (material.status === 'not-linked') !== (material.profileId === null)) throw fail();
+  } else if (!material.profileId || !isU64Decimal(material.updatedAtUnixMs) || typeof material.active !== 'boolean'
+    || material.validation !== (material.status === 'ownership-mismatch' ? 'not-inspected' : 'native-schema-only')) {
+    throw fail();
+  }
+  const runtime = result.runtime;
+  const validReasonCodes = {
+    readable: ['runtime_identity_only', 'confirmed_receipt_matches'], unavailable: ['runtime_identity_unreadable'],
+    changed: ['runtime_identity_changed'],
+    unsupported: ['mobile_runtime_bridge_not_adapted', 'kernel_identity_not_supported'],
+  };
+  if (!validReasonCodes[runtime.status].includes(runtime.reasonCode)) throw fail();
+  if (runtime.status === 'readable') {
+    if (typeof runtime.coreInstanceId !== 'string' || !runtime.coreInstanceId.trim() || runtime.coreInstanceId.length > 512
+      || /[\u0000-\u001f\u007f]/.test(runtime.coreInstanceId) || !isU64Decimal(runtime.configRevision)) throw fail();
+  } else if (runtime.coreInstanceId !== null || runtime.configRevision !== null) throw fail();
+  if (result.canResolve && (result.evidence.candidate !== 'recorded' || result.evidence.receipt !== 'confirmed'
+    || !isRecoveryId(result.recoveryId) || runtime.status !== 'readable'
+    || runtime.reasonCode !== 'confirmed_receipt_matches' || material.status === 'ownership-mismatch')) throw fail();
+  return result;
+}
+
+function isRecoveryId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256 && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value);
+}
+
+/** Publishes only a previously confirmed, host-persisted candidate. No sync/apply/TUN action. */
+export async function recoverConfirmedSubscriptionLocal(
+  id: string, expectedUpdatedAtUnixMs: string, recoveryId: string,
+): Promise<SubscriptionProfile> {
+  if (!id || id.trim() !== id || !isU64Decimal(expectedUpdatedAtUnixMs) || !isRecoveryId(recoveryId)) {
+    throw new Error('来源版本或恢复记录无法确认，请重新核对。');
+  }
+  let result: SubscriptionProfile;
+  try {
+    result = await invoke<SubscriptionProfile>('subscription_recover_confirmed_local', { id, expectedUpdatedAtUnixMs, recoveryId });
+  } catch {
+    throw new Error('本地保存未确认，原核对记录保留；请检查后再决定是否重新核对。');
+  }
+  if (!result || result.id !== id || result.managedSource != null || !Number.isSafeInteger(result.updatedAtUnixMs)
+    || result.updatedAtUnixMs < 0 || BigInt(result.updatedAtUnixMs) < BigInt(expectedUpdatedAtUnixMs)) {
+    throw new Error('本地保存回执未确认，请刷新订阅状态核对；不要自动重复提交。');
+  }
+  proxyConfigSignal.markChanged(true);
+  ruleSetSignal.markChanged();
+  return result;
+}
+
 export async function syncAllSubscriptions(): Promise<SubscriptionSyncAllOutcome> {
   const outcome = await invoke<SubscriptionSyncAllOutcome>('subscription_sync_all');
   proxyConfigSignal.markChanged(true);

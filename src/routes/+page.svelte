@@ -23,6 +23,11 @@
   import { WelcomeGuide } from '$lib/components/WelcomeGuide';
   import { installGlobalErrorTelemetry, recordTelemetry } from '$lib/services/telemetry';
   import { installDesktopWebviewGuards } from '$lib/services/desktop-webview';
+  import MobileShell from '$lib/components/mobile/MobileShell.svelte';
+  import MobileOverview from '$lib/components/mobile/MobileOverview.svelte';
+  import MobileConfiguration from '$lib/components/mobile/MobileConfiguration.svelte';
+  import NodesTab from '$lib/components/tabs/NodesTab.svelte';
+  import { mobilePlatform, observeMobilePresentation } from '$lib/features/mobile/platform.svelte';
   import { provideTrafficWorkspace } from '$lib/features/traffic/context';
 
   provideTrafficWorkspace();
@@ -81,6 +86,8 @@
   }
 
   onMount(() => {
+    const stopMobilePresentation = observeMobilePresentation();
+    store.mobilePresentation = mobilePlatform.isMobileLayout;
     let unlistenNavigate: UnlistenFn | null = null;
     let sourceDisposed = false;
     let unlistenSources: (() => void) | null = null;
@@ -95,7 +102,8 @@
       uiMode: store.uiMode,
       visibility: document.visibilityState,
     }));
-    const uninstallDesktopWebviewGuards = installDesktopWebviewGuards();
+    const uninstallDesktopWebviewGuards = mobilePlatform.runtimePlatform === 'desktop'
+      ? installDesktopWebviewGuards() : () => {};
     initTheme();
     void store.loadFromBackend();
     const unsubscribeConfigNavigation = proxyConfigSignal.onActiveChanged(() => {
@@ -114,7 +122,7 @@
       }
     }).then((unlisten) => {
       unlistenNavigate = unlisten;
-    });
+    }).catch(console.warn);
     void listen<{ action?: string }>('app:tray-action', (event) => {
       void handleTrayAction(guiState, store.uiMode, event.payload.action).then(async () => {
         if (!guiState.systemProxyRecoveryOpen) return;
@@ -125,22 +133,34 @@
       }).catch(console.warn);
     }).then((unlisten) => {
       unlistenTrayAction = unlisten;
-    });
+    }).catch(console.warn);
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const onSystemThemeChange = () => {
       if (store.selectedTheme === 'system') applyTheme('system');
     };
-    mediaQuery.addEventListener('change', onSystemThemeChange);
+    if (mediaQuery.addEventListener) mediaQuery.addEventListener('change', onSystemThemeChange);
+    else mediaQuery.addListener(onSystemThemeChange);
     return () => {
       sourceDisposed = true;
       unlistenSources?.();
-      mediaQuery.removeEventListener('change', onSystemThemeChange);
+      stopMobilePresentation();
+      if (mediaQuery.removeEventListener) mediaQuery.removeEventListener('change', onSystemThemeChange);
+      else mediaQuery.removeListener(onSystemThemeChange);
       unsubscribeConfigNavigation();
       unlistenNavigate?.();
       unlistenTrayAction?.();
       uninstallGlobalErrorTelemetry();
       uninstallDesktopWebviewGuards();
     };
+  });
+
+  $effect(() => {
+    const mobile = mobilePlatform.isMobileLayout;
+    if (mobile === untrack(() => store.mobilePresentation)) return;
+    untrack(() => {
+      store.mobilePresentation = mobile;
+      if (store.isInitialized) void store.refreshInteractionSurface();
+    });
   });
 
   $effect(() => {
@@ -171,7 +191,7 @@
       // kernel. Start the event stream only after that first snapshot settles,
       // otherwise a transient startup race becomes a terminal error state.
       void initializeRuntime(abortController.signal);
-      updater.startPeriodicChecks();
+      if (mobilePlatform.runtimePlatform === 'desktop') updater.startPeriodicChecks();
     });
     return () => {
       abortController.abort();
@@ -211,6 +231,21 @@
   class="h-screen w-screen flex flex-col select-none overflow-hidden transition-colors duration-200"
   style="background: var(--background); color: var(--foreground); font-family: var(--font-sans, system-ui);"
 >
+  {#if mobilePlatform.isMobileLayout}
+    {#if store.appLoading}
+      <div class="mobile-startup" role="status"><Spinner size="sm" color="default" /><span>正在加载配置…</span></div>
+    {:else if store.loadError}
+      <div class="mobile-startup" role="alert"><span>启动失败</span><p>{store.loadError}</p><Button onclick={() => { store.loadError = null; store.appLoading = true; void store.loadFromBackend(); }}>重试</Button></div>
+    {:else if !store.isInitialized}
+      <div class="mobile-onboarding"><WelcomeGuide /></div>
+    {:else}
+      <MobileShell>
+        {#snippet overview()}<MobileOverview />{/snippet}
+        {#snippet nodes()}<NodesTab mobile />{/snippet}
+        {#snippet configuration()}<MobileConfiguration />{/snippet}
+      </MobileShell>
+    {/if}
+  {:else}
   <!-- Title bar: 44px, drag region -->
   <TitleBar />
 
@@ -285,10 +320,14 @@
     </div>
   {/if}
 
+  {/if}
 </main>
-<SystemProxyRecoveryDialog />
+{#if !mobilePlatform.isMobileLayout}<SystemProxyRecoveryDialog />{/if}
 
 <style>
+  .mobile-startup { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:24px; overflow-wrap:anywhere; }
+  .mobile-startup :global(button) { min-height:44px; }
+  .mobile-onboarding { flex:1; min-height:0; overflow:auto; padding:env(safe-area-inset-top,0px) 14px env(safe-area-inset-bottom,0px); }
   /* Loading screen */
   .loading-logo-ring {
     width: 72px;

@@ -60,3 +60,52 @@ fn traffic_list_limits_and_decimal_revision_preconditions_are_explicit() {
     .is_err());
     assert!(serde_json::from_value::<ResetInput>(json!({"expected_core_instance_id":"a","operation_id":"b","targets":[],"metrics":["rx_bytes"]})).is_err());
 }
+#[test]
+fn traffic_host_scope_uses_public_schema_and_explicit_discovery_opt_in() {
+    let scope = Scope::HostInterface {
+        name: "test-only-interface".into(),
+    };
+    assert_eq!(
+        scope.wire(),
+        serde_json::to_value(zero_api::TrafficScope::HostInterface {
+            name: "test-only-interface".into()
+        })
+        .unwrap()
+    );
+    let query = ListInput {
+        include_host_interfaces: true,
+        scopes: vec![scope.clone()],
+        ..Default::default()
+    }
+    .wire()
+    .unwrap();
+    let public: zero_api::TrafficListQuery = serde_json::from_value(query).unwrap();
+    assert!(public.include_host_interfaces);
+    assert_eq!(
+        public.scopes,
+        vec![zero_api::TrafficScope::HostInterface {
+            name: "test-only-interface".into()
+        }]
+    );
+    assert!(ListInput::default()
+        .wire()
+        .unwrap()
+        .get("include_host_interfaces")
+        .is_none());
+    let mut input = reset_input();
+    input.targets[0].scope = scope;
+    assert!(input.wire().unwrap_err().message.contains("只读"));
+}
+#[test]
+fn traffic_host_requires_compatible_feature_and_sampler_declaration() {
+    let mut discovery = json!({"supported":true,"capabilities":{"features":["traffic_host_interface_statistics_v1"],"contracts":{"capabilities":{"current":1,"minimumSupported":1}},"trafficStatistics":{"host_interface_sampling":true}}});
+    require_host_support(&discovery).unwrap();
+    discovery["capabilities"]["trafficStatistics"]["host_interface_sampling"] = json!(false);
+    assert_eq!(
+        require_host_support(&discovery).unwrap_err().code,
+        "unsupported"
+    );
+    discovery["capabilities"]["trafficStatistics"]["host_interface_sampling"] = json!(true);
+    discovery["capabilities"]["features"] = json!([]);
+    assert!(require_host_support(&discovery).is_err());
+}

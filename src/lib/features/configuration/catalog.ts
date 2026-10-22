@@ -1,4 +1,5 @@
 import type { ManagedSubscriptionSource, SubscriptionProfile } from '$lib/types/domain';
+import { subscriptionUsage } from '$lib/features/mobile/subscription-usage';
 
 /** One configuration, with zero or more historical update sources. No raw JSON in list IPC. */
 export interface ConfigurationEntry {
@@ -38,9 +39,7 @@ export function canonicalSubscriptionFormat(value: string): string {
   return format || 'auto';
 }
 export function subscriptionUsedBytes(source: SubscriptionProfile): number | null {
-  if (source.usedBytes != null) return source.usedBytes;
-  if (source.uploadBytes == null && source.downloadBytes == null) return null;
-  return (source.uploadBytes ?? 0) + (source.downloadBytes ?? 0);
+  return subscriptionUsage(source).used;
 }
 
 export function configurationOptions(entries: ConfigurationEntry[]): { value: string; label: string; disabled: boolean }[] {

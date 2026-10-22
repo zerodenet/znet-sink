@@ -4,6 +4,7 @@
   import { elasticOut, cubicOut } from 'svelte/easing';
   import { store } from '$lib/services/store.svelte';
   import AppLogo from '$lib/components/AppLogo.svelte';
+  import { mobilePlatform } from '$lib/features/mobile/platform.svelte';
 
   let step = $state(0);
   let selectedMode = $state<'lite' | 'pro'>(store.uiMode);
@@ -132,14 +133,24 @@
     {:else}
       <div transition:fly={{ y: 10, duration: 220, easing: cubicOut }} class="step-content">
         <div class="step-number">04</div>
-        <h3 class="step-title">开启服务</h3>
+        <h3 class="step-title">{mobilePlatform.isMobileLayout ? '准备使用移动界面' : '开启服务'}</h3>
         <p class="step-desc">
+          {#if mobilePlatform.isMobileLayout}
+          可先浏览和管理本地配置。移动 VPN 与随包内核运行尚未接入，当前界面不会接管网络。
+          {:else}
           准备好内核和代理配置后，在概览页点击「开启服务」。应用会启动内核并开启系统代理；若内核已经运行，按钮会显示为「开启系统代理」。
+          {/if}
         </p>
         <ul class="tips-list">
+          {#if mobilePlatform.isMobileLayout}
+          <li>未运行内核时，本地保存与运行生效分别显示</li>
+          <li>文件、分享等系统交互只在你执行相关动作时请求</li>
+          <li>未接入的平台能力会说明原因，不显示模拟成功</li>
+          {:else}
           <li>概览页会显示内核、系统代理、TUN 和当前路由模式</li>
           <li>本地公网 IP 会在启动、重启和代理切换后自动重新检测</li>
           <li>简约/专业模式可随时在标题栏或设置中切换</li>
+          {/if}
         </ul>
         {#if enterError}
           <div class="enter-error" role="alert">保存界面模式失败：{enterError}</div>

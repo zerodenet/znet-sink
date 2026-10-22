@@ -22,6 +22,23 @@ const HISTORY_ROTATE_EVERY: u64 = 100;
 
 static HISTORY_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+pub(crate) fn storage() -> super::local_data::LocalStoreStorage {
+    let _guard = HISTORY_FILE_LOCK
+        .lock()
+        .expect("connection history file mutex poisoned");
+    super::local_data::inspect(
+        "history",
+        data_dir().map(|root| {
+            let paths = vec![root.join(HISTORY_LOG_DIR).join(HISTORY_LOG_FILE)];
+            (root, paths)
+        }),
+        Some(HISTORY_MAX_BYTES),
+        Some(HISTORY_RECORD_LIMIT),
+        Some(HISTORY_MAX_AGE_MS),
+        "append-and-read-rotation",
+    )
+}
+
 pub(crate) fn append_if_completed(frame: &DebugFrame) -> AppResult<()> {
     if !is_completed_connection_frame(frame) {
         return Ok(());

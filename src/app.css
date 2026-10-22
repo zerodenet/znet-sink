@@ -421,3 +421,19 @@ body .about-root .update-banner-body {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* Mobile touch rules include portalled menus/dialogs outside the shell tree. */
+:root[data-znet-presentation="mobile"] {
+  --control-height-compact: 44px;
+  --control-height: 44px;
+  --control-height-comfortable: 44px;
+}
+:root[data-znet-presentation="mobile"] button,
+:root[data-znet-presentation="mobile"] [role="button"],
+:root[data-znet-presentation="mobile"] [role="combobox"],
+:root[data-znet-presentation="mobile"] [role="option"] {
+  min-height: 44px;
+}
+:root[data-znet-presentation="mobile"] button { min-width: 44px; }
+:root[data-znet-presentation="mobile"] input:not([type="checkbox"]):not([type="radio"]),
+:root[data-znet-presentation="mobile"] textarea { min-height: 44px; font-size: 1rem; }

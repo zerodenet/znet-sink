@@ -49,6 +49,7 @@ pub enum GuiProxyMode {
 pub struct GuiSetProxyModeInput {
     pub mode: GuiProxyMode,
     pub global_outbound: Option<String>,
+    pub expected_scope: Option<crate::client_core::ClientScope>,
     pub restart_core: Option<bool>,
 }
 

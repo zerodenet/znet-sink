@@ -2,8 +2,8 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 export const products = JSON.parse(readFileSync(new URL('../products/desktop.json', import.meta.url), 'utf8'));
 export const tools = [
-  { feature: 'tool-dns', id: 'dns', title: 'DNS 与 Fake-IP', directory: 'dns', panel: true, diagnostics: ['tool-jobs/diagnostics', 'dnsToolDiagnostics'], files: ['Panel.svelte', 'state.svelte.ts'], sharedFiles: ['tool-jobs/client.ts', 'tool-jobs/state.svelte.ts'], style: '.dns-attempts', commands: ['gui_tool_job_start', 'gui_tool_job_cancel'] },
-  { feature: 'tool-route', id: 'route-trace', title: '路由追踪', directory: 'routing', panel: true, diagnostics: ['tool-jobs/diagnostics', 'routeToolDiagnostics'], files: ['Panel.svelte', 'state.svelte.ts'], sharedFiles: ['tool-jobs/client.ts', 'tool-jobs/state.svelte.ts'], style: '.hop-table', commands: ['gui_tool_job_start', 'gui_tool_job_cancel'] },
+  { feature: 'tool-dns', id: 'dns', title: 'DNS 与 Fake-IP', directory: 'dns', panel: true, diagnostics: ['tool-jobs/diagnostics', 'dnsToolDiagnostics'], files: ['Panel.svelte', 'state.svelte.ts', 'cache-result.ts'], sharedFiles: ['tool-jobs/client.ts', 'tool-jobs/state.svelte.ts'], style: '.dns-attempts', commands: ['gui_tool_job_start', 'gui_tool_job_cancel'] },
+  { feature: 'tool-route', id: 'route-trace', title: '路由评估', directory: 'routing', panel: true, diagnostics: ['tool-jobs/diagnostics', 'routeToolDiagnostics'], files: ['Panel.svelte', 'state.svelte.ts', 'result.ts'], sharedFiles: ['tool-jobs/client.ts', 'tool-jobs/state.svelte.ts'], style: '.route-facts', commands: ['gui_tool_job_start', 'gui_tool_job_cancel'] },
   { feature: 'tool-node-probe', id: 'probe-jobs', title: '节点测速任务', directory: 'node-probes', panel: false, diagnostics: ['node-probes/diagnostics', 'probeDiagnostics'], files: ['jobs.svelte.ts', 'client.ts'], commands: ['gui_probe_job_start'] },
 ];
 export function resolveProduct(name = process.env.ZNET_PRODUCT || 'desktop') {
@@ -25,7 +25,7 @@ export function productComposition() {
     resolveId(id) { if ([metadata, panels, probes, diagnostics].includes(id)) return '\0' + id; },
     load(id) {
       if (id === '\0' + metadata) return `export const productName = ${JSON.stringify(product.name)}; export const diagnosticCatalog = ${JSON.stringify(panelTools.map(({id, title}) => ({id, title})))}; export const moduleCatalog = ${JSON.stringify(product.tools.map(({id, title}) => ({id, title})))};`;
-      if (id === '\0' + probes) return product.features.includes('tool-node-probe') ? `import { ProbeJobsState } from '$lib/features/node-probes/jobs.svelte'; import { startProbeJob, cancelProbeJob } from '$lib/features/node-probes/client'; export const createProbeJobs = (query) => new ProbeJobsState(query, startProbeJob, cancelProbeJob);` : 'export const createProbeJobs = null;';
+      if (id === '\0' + probes) return product.features.includes('tool-node-probe') ? `import { ProbeJobsState } from '$lib/features/node-probes/jobs.svelte'; import { startProbeJob, cancelProbeJob, getProbeRuntimeSnapshot } from '$lib/features/node-probes/client'; export const createProbeJobs = (query) => new ProbeJobsState(query, startProbeJob, cancelProbeJob, getProbeRuntimeSnapshot);` : 'export const createProbeJobs = null;';
       if (id === '\0' + diagnostics) {
         const sources = product.tools.filter(tool => tool.diagnostics);
         if (!sources.length) return 'export const toolDiagnostics = [];';

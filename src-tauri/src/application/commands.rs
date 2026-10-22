@@ -1,6 +1,7 @@
 //! One registration point for the existing desktop command surface.
 
 use crate::commands::app_config as app_config_commands;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::commands::app_update as app_update_commands;
 use crate::commands::capability as capability_commands;
 use crate::commands::config_workspace as config_workspace_commands;
@@ -26,48 +27,124 @@ use crate::commands::system_proxy as system_proxy_commands;
 use crate::commands::tool_jobs as tool_job_commands;
 use crate::commands::traffic_observation as traffic_commands;
 
-pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-    builder.invoke_handler(tauri::generate_handler![
+pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+        crate::mobile_host::gui_mobile_platform_snapshot,
+        crate::mobile_host::gui_mobile_subscription_schedule_snapshot,
+        crate::commands::connection_export::native_active_connection_export_preview,
+        crate::commands::runtime_bridge::gui_runtime_bridge_inspect,
+        crate::commands::flow_close::gui_flow_close_inventory,
+        crate::commands::flow_close::gui_flow_close_preview,
+        crate::commands::flow_close::gui_flow_close_submit,
+        crate::commands::flow_close::gui_flow_close_status,
+        crate::commands::flow_close::gui_flow_close_discard,
+        crate::commands::route_editor::gui_route_editor_snapshot,
+        crate::commands::route_editor::gui_route_editor_preview,
+        crate::commands::route_editor::gui_route_editor_save,
+        crate::commands::route_editor::gui_route_editor_status,
+        crate::commands::route_editor::gui_route_editor_discard,
+        crate::commands::dns_migration::gui_dns_migration_snapshot,
+        crate::commands::dns_migration::gui_dns_migration_preview,
+        crate::commands::dns_migration::gui_dns_migration_save,
+        crate::commands::dns_migration::gui_dns_migration_status,
+        crate::commands::dns_migration::gui_dns_migration_discard,
+        crate::commands::rule_migration::gui_rule_migration_snapshot,
+        crate::commands::rule_migration::gui_rule_migration_preview,
+        crate::commands::rule_migration::gui_rule_migration_save,
+        crate::commands::rule_migration::gui_rule_migration_status,
+        crate::commands::rule_migration::gui_rule_migration_discard,
+        crate::commands::mobile_location::gui_mobile_location_snapshot,
+        crate::commands::runtime_network::gui_runtime_network_snapshot,
+        crate::commands::runtime_network::gui_runtime_network_preview,
+        crate::commands::runtime_network::gui_runtime_network_save,
+        crate::commands::runtime_network::gui_runtime_network_status,
+        crate::commands::runtime_network::gui_runtime_network_discard,
+        crate::commands::profile_editor::proxy_config_editor_snapshot,
+        crate::commands::profile_editor::proxy_config_editor_validate,
+        crate::commands::profile_editor::proxy_config_editor_save,
+        crate::commands::profile_editor::proxy_config_editor_read_file,
+        crate::commands::profile_removal::profile_removal_preview,
+        crate::commands::profile_removal::profile_removal_commit,
+        crate::commands::profile_removal::profile_removal_reconcile,
+        crate::commands::endpoint_restoration::gui_endpoint_restoration_preview,
+        crate::commands::endpoint_restoration::gui_endpoint_restoration_apply,
+        crate::commands::endpoint_restoration::gui_endpoint_restoration_reconcile,
+        crate::commands::endpoint_restoration::gui_endpoint_restoration_receipts,
+        crate::commands::native_documents::native_document_capabilities,
+        crate::commands::native_documents::native_document_pick,
+        crate::commands::native_documents::native_document_export_profile,
+        crate::commands::native_documents::native_document_export_settings,
+        crate::commands::native_documents::native_document_export_diagnostics,
+        crate::commands::native_documents::native_document_preview_diagnostics,
+        crate::commands::log_export::log_export_preview,
+        crate::commands::log_export::log_export_deliver,
+        crate::commands::log_export::log_export_discard,
+        crate::commands::native_documents::native_diagnostic_capture,
+        crate::commands::android_plugin_jobs::mobile_plugin_jobs_status,
+        crate::commands::android_app_update::mobile_app_update_status,
+        crate::commands::android_app_update::mobile_app_update_download,
+        crate::commands::android_app_update::mobile_app_update_action,
+        crate::commands::mobile_release::mobile_release_catalog,
+        crate::commands::mobile_release::mobile_release_preferences,
+        crate::commands::mobile_release::mobile_release_preferences_save,
+        crate::commands::mobile_release::mobile_release_schedule,
+        crate::commands::mobile_release::mobile_release_preferences_operation,
+        crate::commands::mobile_release::mobile_release_preferences_confirm,
+        crate::commands::mobile_notifications::mobile_notification_status,
+        crate::commands::mobile_notifications::mobile_notification_request,
+        crate::commands::mobile_notifications::mobile_notification_preference,
+        crate::commands::license_inventory::app_license_inventory,
+        crate::commands::connection_export::native_connection_export_preview,
+        crate::commands::connection_export::native_connection_export_deliver,
+        crate::commands::settings_transfer::settings_transfer_export,
+        crate::commands::settings_transfer::settings_transfer_preview,
+        crate::commands::settings_transfer::settings_transfer_commit,
+        crate::commands::settings_transfer::settings_transfer_status,
+        crate::commands::packet_routes::gui_packet_routes_snapshot,
+        crate::commands::packet_routes::gui_packet_ledger_inspect,
+        crate::commands::recovery_storage::gui_workspace_storage_inspect,
+        crate::commands::packet_routes::gui_packet_route_detail,
+        crate::commands::packet_routes::gui_close_packet_route,
         plugin_commands::plugins_supported,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_snapshot,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_host_recheck,
+        plugin_commands::plugins_native_package_inspect,
+        plugin_commands::plugins_native_vm_smoke,
         plugin_commands::plugins_page,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_page_document,
+        plugin_commands::plugins_page_close,
+        plugin_commands::plugins_page_check,
+        plugin_commands::plugins_page_configure,
+        plugin_commands::plugins_page_invoke,
+        plugin_commands::plugins_page_sdk_call,
+        plugin_commands::plugins_page_protected_load,
+        plugin_commands::plugins_page_file_preflight,
         plugin_commands::plugins_refresh,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_authorize,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_configure,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_stop,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_revoke_permissions,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_storage_get,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_storage_put,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_storage_delete,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_run,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_invoke,
         plugin_commands::plugins_sdk_call,
         plugin_commands::plugins_protected_load,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_preview_install,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_native_package_pick,
+        plugin_commands::plugins_native_package_confirm,
+        plugin_commands::plugins_native_package_cancel,
         plugin_commands::plugins_install,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_uninstall,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_uninstall_preview,
+        plugin_commands::plugins_uninstall_execute,
+        plugin_commands::plugins_uninstall_status,
+        plugin_commands::plugins_uninstall_discard,
+        plugin_commands::plugins_uninstall_recent,
         plugin_commands::plugins_catalog,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_releases,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_preview_release,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_install_release,
         core_commands::core_ipc_default_endpoint,
         core_commands::core_status,
@@ -96,6 +173,13 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         config_workspace_commands::gui_config_workspace_snapshot,
         config_workspace_commands::gui_config_workspace_plan,
         config_workspace_commands::gui_config_workspace_apply,
+        config_workspace_commands::gui_config_workspace_save_local,
+        config_workspace_commands::gui_config_workspace_format,
+        config_workspace_commands::gui_config_workspace_validate,
+        config_workspace_commands::gui_config_workspace_operation,
+        config_workspace_commands::gui_config_workspace_recovery_review,
+        config_workspace_commands::gui_config_workspace_complete_local,
+        config_workspace_commands::gui_config_workspace_discard,
         core_config_commands::core_download_latest,
         gui_core_commands::gui_core_overview,
         gui_core_commands::gui_client_core_snapshot,
@@ -171,6 +255,7 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         gui_events_commands::gui_events_start,
         gui_events_commands::gui_events_stop,
         debug_commands::gui_debug_frames,
+        debug_commands::gui_local_data_summary,
         debug_commands::gui_debug_capture,
         debug_commands::gui_connection_history_export,
         debug_commands::gui_debug_clear,
@@ -185,8 +270,11 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         app_config_commands::app_config_apply_tun,
         app_config_commands::app_config_export_kernel_settings,
         app_config_commands::app_config_import_kernel_settings,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         app_update_commands::app_check_release,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         app_update_commands::download::app_download_update,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         app_update_commands::download::app_install_update,
         proxy_config_commands::configuration_list,
         proxy_config_commands::proxy_config_list,
@@ -201,6 +289,9 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         subscription_commands::subscription_upsert,
         subscription_commands::subscription_sync,
         subscription_commands::subscription_sync_all,
+        subscription_commands::subscription_reset_conditional_cache,
+        subscription_commands::subscription_reconcile_unknown,
+        subscription_commands::subscription_recover_confirmed_local,
         subscription_commands::subscription_remove_preview,
         subscription_commands::subscription_remove,
         rule_set_commands::rule_set_list,
@@ -236,6 +327,18 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         gui_core_commands::gui_debug_storage_summary,
         gui_core_commands::gui_clear_debug_storage,
         gui_core_commands::gui_export_diagnostics,
+        gui_core_commands::gui_discard_diagnostics,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         crate::desktop::tray::tray_update_status,
-    ])
+    ];
+    builder.invoke_handler(move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+        if cfg!(any(target_os = "android", target_os = "ios"))
+            && znet_client_core::mobile::requires_desktop_host(invoke.message.command())
+        {
+            let error = crate::mobile_host::unavailable(invoke.message.command());
+            invoke.resolver.reject(error);
+            return true;
+        }
+        handler(invoke)
+    })
 }

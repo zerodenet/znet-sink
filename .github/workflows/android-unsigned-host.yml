@@ -1,0 +1,120 @@
+name: Android unsigned application host
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main, feat/mobile-v0.0.3]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: znet-android-unsigned-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unsigned-arm64-host:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
+    name: Android arm64 unsigned host (minimum API 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/android-unsigned-host
+      ZNET_PRODUCT_FEATURES: tool-dns,tool-route,tool-node-probe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Install pinned Android tools
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 'ndk;27.3.13750724'
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev
+          echo "$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/android-user" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/znet-host-gradle" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/android-user"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --manifest-path src-tauri/Cargo.toml --locked
+      - name: Prepare target-specific dependency notices
+        run: |
+          set -euo pipefail
+          pnpm test:licenses
+          pnpm build
+          mkdir -p "$GRADLE_USER_HOME/init.d"
+          cp scripts/license-gradle.init.gradle "$GRADLE_USER_HOME/init.d/license-gradle.init.gradle"
+          node scripts/license-rust.mjs --target aarch64-linux-android --profile release --features "$ZNET_PRODUCT_FEATURES" --output "$RUNNER_TEMP/rust-license.json"
+          echo "ZNET_LICENSE_INVENTORY=$RUNNER_TEMP/rust-license.json" >> "$GITHUB_ENV"
+          echo "ZNET_REQUIRE_LICENSE_INVENTORY=1" >> "$GITHUB_ENV"
+          echo "TAURI_ZNET_LICENSE_INVENTORY=$RUNNER_TEMP/rust-license.json" >> "$GITHUB_ENV"
+          echo "TAURI_ZNET_REQUIRE_LICENSE_INVENTORY=1" >> "$GITHUB_ENV"
+          echo "ZNET_LICENSE_FRONTEND=$GITHUB_WORKSPACE/build/license-inventory.frontend.json" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_znetLicenseMergeScript=$GITHUB_WORKSPACE/scripts/license-native-merge.mjs" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_znetLicenseCargoInventory=$RUNNER_TEMP/rust-license.json" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_znetLicenseFrontendInventory=$GITHUB_WORKSPACE/build/license-inventory.frontend.json" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_znetLicenseMaterialsCache=$GITHUB_WORKSPACE/resources/licenses/authoritative-materials.json" >> "$GITHUB_ENV"
+      - name: Build the actual unsigned Release application host
+        run: |
+          set -o pipefail
+          mkdir -p android-host-evidence
+          test ! -e "$ANDROID_USER_HOME/debug.keystore"
+          pnpm tauri android build --apk --target aarch64 --ci 2>&1 | tee android-host-evidence/unsigned-build.log
+          test ! -e "$ANDROID_USER_HOME/debug.keystore"
+          git diff --exit-code -- src-tauri/Cargo.lock
+      - name: Test host WebView compatibility policy
+        working-directory: src-tauri/gen/android
+        run: |
+          set -o pipefail
+          ./gradlew :app:testUniversalReleaseUnitTest --no-daemon 2>&1 | tee "$GITHUB_WORKSPACE/android-host-evidence/webview-policy-tests.log"
+          cp -R app/build/test-results "$GITHUB_WORKSPACE/android-host-evidence/host-test-results"
+      - name: Inspect package and assert it is unsigned
+        run: |
+          set -euo pipefail
+          apk=src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
+          test -f "$apk"
+          python3 scripts/verify-unsigned-android-apk.py "$apk" | tee android-host-evidence/unsigned-verification.json
+          node scripts/license-artifact.mjs --apk "$apk" --frontend build/license-inventory.frontend.json --output android-host-evidence/license-inventory.actual.json --receipt android-host-evidence/license-artifact-receipt.json
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > android-host-evidence/package-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree "$apk" AndroidManifest.xml > android-host-evidence/package-manifest.txt
+          python3 - android-host-evidence/package-badging.txt <<'PY'
+          import pathlib, re, sys
+          badging = pathlib.Path(sys.argv[1]).read_text()
+          assert "sdkVersion:'24'" in badging.splitlines(), "Unexpected minimum API"
+          assert "targetSdkVersion:'36'" in badging.splitlines(), "Unexpected target API"
+          assert re.search(r"^package: name='org\.zerodenet\.znetsink' ", badging, re.M), "Unexpected application ID"
+          manifest = pathlib.Path('android-host-evidence/package-manifest.txt').read_text()
+          assert not re.search(r'android:debuggable[^\n]*?(?:0xffffffff|true)\b', manifest), "Release must not be debuggable"
+          PY
+          cp "$apk" android-host-evidence/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-unsigned-host-evidence
+          path: android-host-evidence/
+          if-no-files-found: warn

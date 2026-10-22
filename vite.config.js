@@ -1,3 +1,4 @@
+import { licenseInventory } from './scripts/license-vite.mjs';
 import { productComposition } from './scripts/product-composition.mjs';
 import { defineConfig } from "vite";
 import tailwindcss from '@tailwindcss/vite';
@@ -9,9 +10,14 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [
     productComposition(),
+    licenseInventory(),
     tailwindcss(),
     sveltekit()
   ],
+
+  // OS support and the system WebView version are separate prerequisites.
+  // Android API 24 uses an updated WebView; avoid a newer build-only JS floor.
+  build: { target: ["chrome111", "safari16.4"] },
 
   // Tabs and settings panels are lazy-loaded. Pre-bundle their shared
   // dependencies before Tauri opens the WebView so Vite does not discover a

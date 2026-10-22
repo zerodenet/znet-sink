@@ -1,7 +1,8 @@
+use crate::models::logs::{HostDiagnosticEvent as HostEvent, ProcessEvent};
 use crate::models::{
     core_config::CoreConfigSnapshot,
     core_process::{CoreProcessExitReason, CoreProcessState},
-    logs::{LogLevel, LogSource},
+    logs::LogLevel,
 };
 use crate::services::{common::lock, logs, system_proxy_guard};
 use crate::state::app_state::AppState;
@@ -92,9 +93,9 @@ pub(super) fn spawn_monitor(
                     )) {
                         Ok(reconnected) => {
                             if reconnected {
-                                let _ = logs::append_entry(
+                                let _ = logs::append_host_entry(
                                     &state,
-                                    LogSource::App,
+                                    HostEvent::Process(ProcessEvent::SharedConnectionRecovered),
                                     LogLevel::Warn,
                                     "kernel IPC shared connection recovered".to_string(),
                                     None,
@@ -109,16 +110,16 @@ pub(super) fn spawn_monitor(
                                 ping_failures, MAX_PING_FAILURES, error.message
                             );
                             if ping_failures >= MAX_PING_FAILURES {
-                                let _ = logs::append_entry(
-                                    &state,
-                                    LogSource::App,
-                                    LogLevel::Error,
-                                    format!(
+                                let _ = logs::append_host_entry(
+                                            &state,
+                                            HostEvent::Process(ProcessEvent::Unresponsive),
+                                            LogLevel::Error,
+                                            format!(
                                         "kernel unresponsive for {} consecutive shared IPC checks; killing to force restart",
                                         ping_failures
                                     ),
-                                    None,
-                                );
+                                            None,
+                                        );
                                 ping_failures = 0;
                                 if let Ok(mut process) =
                                     lock(state.runtime_host().process(), "core_process")
@@ -202,8 +203,17 @@ pub(super) fn spawn_monitor(
                         .record_error(format!("proxy cleanup after core exit: {}", error.message));
                 }
                 let msg = format!("core process {} (code={})", reason_str, code.unwrap_or(-1));
-                let _ =
-                    logs::append_entry(&state, LogSource::App, LogLevel::Warn, msg.clone(), None);
+                let _ = logs::append_host_entry(
+                    &state,
+                    HostEvent::Process(if code.is_none() {
+                        ProcessEvent::Crashed
+                    } else {
+                        ProcessEvent::Exited
+                    }),
+                    LogLevel::Warn,
+                    msg.clone(),
+                    None,
+                );
                 let _ = app_handle.emit(
                     "core:process-exited",
                     json!({
@@ -233,9 +243,9 @@ pub(super) fn spawn_monitor(
                         "core process crashed {} times consecutively; giving up auto-restart",
                         MAX_RESTARTS
                     );
-                    let _ = logs::append_entry(
+                    let _ = logs::append_host_entry(
                         &state,
-                        LogSource::App,
+                        HostEvent::Process(ProcessEvent::AutoRestartExhausted),
                         LogLevel::Error,
                         msg.clone(),
                         None,
@@ -251,9 +261,9 @@ pub(super) fn spawn_monitor(
                     "[ZNet] watchdog: kernel exited, restarting in {:?} (attempt {}/{})",
                     RESTART_BACKOFF, restart_budget, MAX_RESTARTS
                 );
-                let _ = logs::append_entry(
+                let _ = logs::append_host_entry(
                     &state,
-                    LogSource::App,
+                    HostEvent::Process(ProcessEvent::AutoRestartScheduled),
                     LogLevel::Info,
                     format!(
                         "core process: auto-restart in {:?} (attempt {}/{})",

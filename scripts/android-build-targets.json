@@ -1,0 +1,18 @@
+{
+  "aarch64": {
+    "triple": "aarch64-linux-android",
+    "abi": "arm64-v8a",
+    "gradleArch": "arm64",
+    "elfClass": 2,
+    "elfMachine": 183,
+    "elfHeaderBytes": 64
+  },
+  "i686": {
+    "triple": "i686-linux-android",
+    "abi": "x86",
+    "gradleArch": "x86",
+    "elfClass": 1,
+    "elfMachine": 3,
+    "elfHeaderBytes": 52
+  }
+}

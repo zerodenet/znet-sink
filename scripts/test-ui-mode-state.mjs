@@ -126,6 +126,26 @@ test('explicit advanced settings and open pages survive switching to Lite', asyn
   assert.equal(store.activeTab, 'profiles'); assert.equal(store.uiMode, 'lite');
 });
 
+
+test('mobile projection retains complete navigation and settings without persisting desktop Pro', async () => {
+  const presentations = [];
+  const { store, requests } = harness(async presentation => {
+    presentations.push(presentation);
+    return { navigation: [{ key: 'profiles', visible: false }], actions: [], features: [] };
+  });
+  store.uiMode = 'lite';
+  store.mobilePresentation = true;
+  store.activeTab = 'profiles';
+  await store.refreshInteractionSurface();
+  assert.deepEqual(presentations, ['mobile']);
+  assert.equal(store.activeTab, 'profiles');
+  assert.equal(store.isNavVisible('rules'), true);
+  store.openSettings('tun');
+  assert.equal(store.settingsSection, 'tun');
+  assert.equal(store.uiMode, 'lite');
+  assert.deepEqual(requests, []);
+});
+
 test('both layouts use one configuration navigation entry and old subscription shortcuts resolve to it', async () => {
   const {store}=harness();
   for(const mode of ['lite','pro']) {

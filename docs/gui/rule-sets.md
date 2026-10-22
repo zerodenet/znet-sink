@@ -1,51 +1,38 @@
 # 规则集配置
 
-规则集页面只管理由 GUI 创建或导入的公共规则资源。节点订阅随附的规则提供者属于该订阅的内部资源：同步时由应用层下载、转换并注入对应订阅配置，但不会通过 `rule_set_list` / `rule_set_get` 暴露，也不会出现在规则集页面。
+规则集页管理 GUI 创建或导入的公共资源；节点订阅随附的提供者属于订阅内部资源，
+不通过普通规则集列表、详情或迁移入口取得编辑权限。内置资源保留启停和绑定，不能普通删除。
 
-`RuleSetProfile.id` 是 GUI 存储主键，只用于管理这条规则集记录；它不是 zero 内核规则集 `tag`。后续如果要把 GUI 规则集注入 zero 配置，需要单独定义 `tag` 映射规则。
+`RuleSetProfile.id` 是 GUI 主键；原生公共 tag 使用现有 `gui-common-<hash(id)>` 映射。
+二者、来源名称与 artifact 路径不能互相冒充资源身份。原生来源自己声明的规则集继续按来源归属管理。
 
-## 命令
+## 读取及维护
 
-| 命令 | 说明 |
-| --- | --- |
-| `rule_set_list` | 列出规则集 |
-| `rule_set_get` | 获取单个规则集 |
-| `rule_set_upsert` | 创建或更新规则集 |
-| `rule_set_remove` | 删除规则集 |
+`rule_set_list` 返回 `RuleSetSummary[]`，避免将大型远程规则数组传给页面；
+`rule_set_get({id})` 返回适合详情/本地编辑的完整资源。可编辑语义是实际 Zero Rule IR，
+通过 `semanticIr` 输入；普通来源元资料为 `url/format/updateIntervalSecs/userAgent`。
+当前模型还包含 `commonBinding`、`sourceState`、`artifact`、更新时间及可选同步错误。
+旧版 `format + source.kind/content` 示例不再代表当前 DTO。
 
-## 调用参数
+新增、更新和同步仍使用现有 `rule_set_upsert/update/update_all`、内置更新及公共绑定命令。
+公共绑定的启用、action 与 order 属于资源自身；当前模式、客户端偏好、编译产物及实际运行校验
+共同决定是否注入，不由页面中的开关单独证明运行已生效。
 
-| 命令 | 入参 | 返回 |
+## 删除及引用迁移
+
+删除改用[规则集引用与 DNS 迁移契约](reference-migrations-v0.0.3.md)。
+旧 `rule_set_remove({id})` 保留明确拒绝回执 `rule_migration_preview_required`，
+不再先删除本地记录再自动协调运行态。
+
+| 命令 | 输入 | 行为 |
 | --- | --- | --- |
-| `rule_set_list` | 无 | `RuleSetProfile[]` |
-| `rule_set_get` | `{ id }` | `RuleSetProfile` |
-| `rule_set_upsert` | `{ input: RuleSetUpsert }` | `RuleSetProfile` |
-| `rule_set_remove` | `{ id }` | `void` |
+| `gui_rule_migration_snapshot` | `profileId, ruleSetId` | 当前资源身份、原生 tag、真实引用位置、受限范围和声明替代项 |
+| `gui_rule_migration_preview` | `input:{profileId,ruleSetId,binding,targetId}` | 固定引用、替代资源、删除影响及候选；未引用资源可不选替代 |
+| `gui_rule_migration_save` | `planId` | CAS 核对后先发布引用、再删除旧记录，保存待应用 |
+| `gui_rule_migration_status` | `planId` | 只读核对原操作及本地阶段，不重放 |
+| `gui_rule_migration_discard` | `planId` | 释放尚可丢弃的预览；未知原操作保留屏障 |
 
-## RuleSetProfile
-
-```json
-{
-  "id": "rule-set_18f6b2a7c9f42",
-  "name": "GeoIP CN",
-  "format": "json",
-  "enabled": true,
-  "source": {
-    "kind": "remote",
-    "url": "https://example.com/rules.json",
-    "path": null,
-    "content": null
-  },
-  "updatedAtUnixMs": 1713500000000
-}
-```
-
-## Source
-
-| kind | 必填字段 | 说明 |
-| --- | --- | --- |
-| `remote` | `url` | 远程规则集，URL 必须是 `http://` 或 `https://` |
-| `file` | `path` | 本地文件 |
-| `inline` | `content` | 内联 JSON 内容 |
-
-当前规则集不会自动注入 active 代理配置。前端如需“编辑规则集并生成 zero 配置”，需要另行定义转换规则。
+托管/受保护/无法检查的材料及不能安全迁移的跨配置引用明确阻止提交，不静默遗漏引用。
+引用保存在客户端覆盖，原始来源和关系不改写；未知字段与 u64 留在 Rust Value 中。
+产物文件保留，删除记录不结束已有连接。跨文件阶段失败不宣称原子回滚，
+本地 `saved_pending_apply` 也不代表内核运行、DNS 或 VPN 已应用。

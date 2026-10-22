@@ -9,8 +9,7 @@ pub use original::{
     LocalProxyEndpoint,
 };
 pub(crate) use original::{
-    ensure_managed_system_proxy_compatible, remove_managed_runtime, restore_profiles,
-    retarget_managed_system_proxy, upsert_runtime_locked,
+    ensure_managed_system_proxy_compatible, remove_managed_runtime, upsert_runtime_locked,
 };
 
 use serde_json::{json, Value};
@@ -262,6 +261,29 @@ pub async fn upsert_runtime(
     Ok(profile)
 }
 
+pub(crate) async fn upsert_ordinary_subscription_runtime(
+    app_handle: AppHandle,
+    mut input: ProxyConfigUpsert,
+    expected_source: &SubscriptionProfile,
+    next_source: SubscriptionProfile,
+) -> AppResult<(ProxyConfigProfile, Option<SubscriptionProfile>)> {
+    let managed_by_gui = {
+        let state = app_handle.state::<AppState>();
+        prepare_subscription_upsert(state.inner(), &mut input)?
+    };
+    let result = original::upsert_ordinary_subscription_runtime(
+        app_handle.clone(),
+        input,
+        expected_source,
+        next_source,
+    )
+    .await?;
+    if managed_by_gui && result.1.is_none() {
+        clear_managed_source(app_handle.state::<AppState>().inner())?;
+    }
+    Ok(result)
+}
+
 pub(crate) async fn upsert_managed_subscription_runtime(
     app_handle: AppHandle,
     mut input: ProxyConfigUpsert,
@@ -283,6 +305,55 @@ pub(crate) async fn upsert_managed_subscription_runtime(
         next_subscriptions,
     )
     .await
+}
+
+/// A cold OS-owned worker has no Activity/AppHandle and cannot coordinate a
+/// running desktop/runtime transaction. It may still replace authenticated
+/// local source material. The shared domain graph and application preferences
+/// are compared at commit, and the active profile projection remains pending
+/// runtime apply. No IPC, VPN, system proxy or listener is started here.
+pub(crate) async fn save_managed_subscription_pending<F>(
+    state: &AppState,
+    mut input: ProxyConfigUpsert,
+    owner: ManagedSubscriptionSource,
+    previous_subscriptions: Vec<SubscriptionProfile>,
+    next_subscriptions: Vec<SubscriptionProfile>,
+    authorize: &F,
+) -> AppResult<ProxyConfigProfile>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    let _operation = state.proxy_config_operation().lock().await;
+    authorize()?;
+    if !matches!(
+        crate::services::core_process::refresh_status(state)?.state,
+        crate::models::core_process::CoreProcessState::NotStarted
+            | crate::models::core_process::CoreProcessState::Exited
+            | crate::models::core_process::CoreProcessState::Failed
+    ) {
+        return Err(AppError::invalid_argument(
+            "后台材料提交需要核对运行状态；当前内核非离线，保留原配置并返回前台协调",
+        ));
+    }
+    prepare_subscription_upsert(state, &mut input)?;
+    let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
+    let app = lock(state.app_config(), "app_config")?.clone();
+    let (next, profile) = original::prepare_owned_upsert(&previous, input, Some(owner))?;
+    authorize()?;
+    crate::configuration::persistence::commit_checked_authorized(
+        state,
+        &previous,
+        &previous_subscriptions,
+        &app,
+        next,
+        next_subscriptions,
+        true,
+        None,
+        None,
+        None,
+        authorize,
+    )?;
+    Ok(profile)
 }
 
 #[cfg(test)]

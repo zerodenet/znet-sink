@@ -1,15 +1,27 @@
 <script lang="ts">
+  import StorageInspectionPanel from '$lib/components/settings/StorageInspectionPanel.svelte';
   import { Textarea } from '$lib/components/ui/textarea';
   import { configEditor, type ValidationError, type ConfigImpactItem } from '$lib/services/config-workspace.svelte';
   import { Button } from '$lib/components/ui/button';
   import { AlertTriangle, Check, Loader2, RefreshCcw, RotateCcw, Send, ScanSearch, Zap, Power } from '@lucide/svelte';
+  import MobileSettingsDraftGuard from '$lib/components/mobile/MobileSettingsDraftGuard.svelte';
   import KernelSettingsTransfer from '$lib/components/settings/KernelSettingsTransfer.svelte';
+  import * as Dialog from '$lib/components/ui/dialog';
 
   // Textarea.ref has a null fallback. Svelte rejects binding an undefined
   // parent value to a bindable prop with a non-undefined fallback.
   let textareaRef: HTMLTextAreaElement | null = $state(null);
   let tabSize = 2;
   let workspaceView: 'source' | 'overrides' | 'effective' = $state('source');
+  let confirmRefresh = $state(false);
+  let recoveryConfirm = $state(false);
+  let reviewedToken = $state<string | null>(null);
+  let reviewedPlanId = $state<string | null>(null);
+  function recoveryDeadline(value: string): string {
+    if (!/^(0|[1-9]\d*)$/.test(value) || BigInt(value) > 8640000000000000n) return '检查有效期未提供，请重新检查';
+    const timestamp = Number(value);
+    return timestamp <= Date.now() ? '恢复检查已过期，请重新检查' : `本次检查有效至 ${new Date(timestamp).toLocaleString('zh-CN') }；提交时再次校验，过期须重新检查`;
+  }
 
   $effect(() => {
     // Auto-load on mount
@@ -41,6 +53,7 @@
   }
 
   async function handleLoad() {
+    if (configEditor.dirty) { confirmRefresh = true; return; }
     await configEditor.load();
   }
 
@@ -56,12 +69,7 @@
     configEditor.reset();
   }
 
-  function formatJson() {
-    const parsed = configEditor.parseDraft();
-    if (parsed) {
-      configEditor.updateDraft(JSON.stringify(parsed, null, 2));
-    }
-  }
+  async function formatJson() { await configEditor.format(); }
 
   function jsonLineCount(): number {
     const lines = configEditor.draftJson.split('\n');
@@ -86,19 +94,11 @@
   }
 
   const isLoading = $derived(
-    configEditor.phase === 'validating' || configEditor.phase === 'applying' || configEditor.phase === 'planning'
+    configEditor.busy
   );
-  const canValidate = $derived(
-    configEditor.phase === 'loaded' || configEditor.phase === 'editing' || configEditor.phase === 'error'
-  );
-  const canPlanApply = $derived(
-    configEditor.supportsPlanApply
-    && (configEditor.phase === 'editing' || configEditor.phase === 'loaded' || configEditor.phase === 'error')
-    && configEditor.dirty
-  );
-  const canApply = $derived(
-    (configEditor.phase === 'editing' || configEditor.phase === 'loaded' || configEditor.phase === 'planned') && configEditor.dirty
-  );
+  const canValidate = $derived(configEditor.writable);
+  const canPlanApply = $derived(configEditor.writable && configEditor.supportsPlanApply);
+  const canApply = $derived(configEditor.writable && !configEditor.planResult?.applyUnavailableReason);
   const canReset = $derived(configEditor.dirty);
   const hasValidationErrors = $derived(configEditor.validationErrors.length > 0);
   const hasPlanResult = $derived(configEditor.planResult !== null);
@@ -119,22 +119,57 @@
   }
 </script>
 
+<MobileSettingsDraftGuard dirty={configEditor.dirty} busy={configEditor.busy} label="配置工作区" onDiscard={() => configEditor.reset()} />
+
 <div class="panel">
   <!-- Header -->
   <div class="header">
     <div class="heading">
       <div class="title">内核配置编辑</div>
       <div class="desc">
-        对照来源配置、客户端覆盖与最终生效配置；预检后以热加载或重启事务应用。
+        对照来源、客户端覆盖与最终配置；可独立保存本地，运行应用需真实预检和回执。
       </div>
     </div>
     <div class="actions">
-      <Button variant="ghost" size="icon-sm" onclick={handleLoad} disabled={isLoading}>
+      <Button variant="ghost" size="icon-sm" onclick={handleLoad} disabled={isLoading} aria-label="刷新配置来源">
         <RefreshCcw class="h-3.5 w-3.5" />
       </Button>
     </div>
   </div>
 
+  <StorageInspectionPanel kind="workspace" scopeKey={JSON.stringify([configEditor.profileName, configEditor.readOnlyReason, configEditor.conflict])} />
+
+  {#if confirmRefresh}
+    <div role="alertdialog" aria-label="刷新来源确认" class="error-panel">
+      <p>刷新会放弃当前未保存草稿；外部来源不会自动覆盖输入。</p>
+      <Button variant="destructive" onclick={async () => { confirmRefresh = false; await configEditor.load(true); }}>放弃草稿并刷新</Button>
+      <Button variant="outline" onclick={() => confirmRefresh = false}>继续编辑</Button>
+    </div>
+  {/if}
+  {#if configEditor.readOnlyReason}<div role="status" class="error-panel">{configEditor.readOnlyReason}；来源、覆盖及最终正文均未提供。</div>{/if}
+  {#if configEditor.conflict}<div role="alert" class="error-panel">来源已变化，原草稿保留。旧预检已失效，请明确刷新后重新预检。</div>{/if}
+  {#if configEditor.pendingApply}<p role="status">{configEditor.phase === 'saved' ? '已保存，待应用' : '本地材料已保存，运行待应用或核对'}；保存不等于内核或 VPN 生效。</p>{/if}
+  {#if configEditor.operationId}
+    <section aria-label="原工作区操作恢复" class="error-panel">
+      <p role="status">原事务结果未确认；只核对原操作，不会重新提交。</p>
+      <p class="operation-id">原操作：{configEditor.operationId}</p>
+      <p>{configEditor.operation?.state === 'runtime_confirmed_pending_local' ? '原运行操作已有确认回执，本地发布尚未完成；不代表当前运行态仍有效。' : '原操作的运行结果未确认；恢复元资料不代表运行成功，不会自动重放。'}</p>
+      {#if configEditor.operation?.reason}<p>{configEditor.operation.reason}</p>{/if}
+      <Button variant="outline" disabled={isLoading} onclick={() => configEditor.checkOperation()}>核对原事务</Button>
+      <Button variant="outline" disabled={isLoading} onclick={() => configEditor.reviewRecovery()}>检查原操作恢复</Button>
+      {#if configEditor.recoveryReview}
+        <p role="status">{configEditor.recoveryReview.reason}</p>
+        {#if configEditor.recoveryReview.expiresAtUnixMs}<p>{recoveryDeadline(configEditor.recoveryReview.expiresAtUnixMs)}</p>{/if}
+        {#if configEditor.recoveryReview.canCompleteLocal}
+          <p>仅完成此原操作的本地发布，不发送新的配置应用或 TUN 命令。</p>
+          {#if configEditor.dirty}<p>未保存草稿仍保留；先明确放弃草稿，再重新检查原操作。</p>{/if}
+          <Button disabled={!configEditor.canCompleteLocal} onclick={() => { reviewedToken = configEditor.recoveryReview?.reviewId ?? null; reviewedPlanId = configEditor.recoveryReview?.planId ?? null; recoveryConfirm = true; }}>完成原本地发布</Button>
+        {/if}
+      {/if}
+    </section>
+  {:else if configEditor.operation}
+    <p role="status" class="operation-id">原操作历史：{configEditor.operation.planId} · {configEditor.operation.state === 'confirmed' ? '原事务已完成' : '原事务已拒绝'}。历史回执不代表当前运行态。</p>
+  {/if}
   {#if configEditor.runtime}
     <div class="runtime-card" class:confirmed={configEditor.runtime.confirmed}>
       <div class="runtime-main">
@@ -176,6 +211,11 @@
           <Loader2 class="h-3 w-3 animate-spin" />
           应用中
         </span>
+      {:else if configEditor.phase === 'saved'}<span class="status-badge">已保存，待应用</span>
+      {:else if configEditor.phase === 'saving'}<span class="status-badge">本地保存中</span>
+      {:else if configEditor.phase === 'checking'}<span class="status-badge">原操作检查中</span>
+      {:else if configEditor.phase === 'completing'}<span class="status-badge">原本地发布提交中</span>
+      {:else if configEditor.phase === 'unknown'}<span class="status-badge error">结果未确认</span>
       {:else if configEditor.phase === 'applied'}
         <span class="status-badge success">
           <Check class="h-3 w-3" />
@@ -200,11 +240,12 @@
     </div>
 
     <div class="actions-bar">
+      <Button variant="outline" size="sm" disabled={!configEditor.writable || isLoading} onclick={() => configEditor.saveLocal()}>保存本地</Button>
       <Button
         variant="outline"
         size="sm"
         onclick={formatJson}
-        disabled={!configEditor.draftJson}
+        disabled={!configEditor.draftJson || isLoading || !!configEditor.readOnlyReason}
         title="格式化 JSON"
       >
         格式化
@@ -214,7 +255,7 @@
         size="sm"
         onclick={handleReset}
         disabled={!canReset}
-        title="放弃修改，恢复到内核当前配置"
+        title="放弃修改，恢复已读取的本地来源文本；不改变运行态"
       >
         <RotateCcw class="h-3.5 w-3.5" />
         重置
@@ -253,9 +294,9 @@
         size="sm"
         variant={needsConfirmApply ? 'destructive' : 'default'}
         onclick={handleApply}
-        disabled={!canApply || isLoading}
+        disabled={!canApply || isLoading || needsConfirmApply}
         title={needsConfirmApply
-          ? '停止并重启内核后应用配置；失败时恢复上一份配置并再次启动'
+          ? '当前客户端安全启动及固定材料通道未适配；保留影响，可保存本地待应用'
           : '校验、预检并热加载到运行中的内核'}
       >
         {#if configEditor.phase === 'applying'}
@@ -269,6 +310,8 @@
       </Button>
     </div>
   </div>
+
+  {#if configEditor.planResult?.applyUnavailableReason}<p role="status" class="error-panel">{configEditor.planResult.applyUnavailableReason}</p>{/if}
 
   <!-- Validation errors -->
   {#if hasValidationErrors}
@@ -389,7 +432,9 @@
 
   <!-- Workspace views -->
   {#if configEditor.phase !== 'idle'}
-    {#if workspaceView === 'source'}
+    {#if configEditor.readOnlyReason}<p>来源正文只读且未提供，请使用来源管理入口。</p>
+      {#if configEditor.dirty}<p>此前普通来源的未保存草稿仍保留，当前不可提交：</p><Textarea aria-label="此前普通来源草稿" readonly value={configEditor.draftJson} />{/if}
+    {:else if workspaceView === 'source'}
       <div class="editor-container">
         <div class="line-numbers">
           {#each Array(jsonLineCount()) as _, i (i)}
@@ -400,6 +445,7 @@
           bind:ref={textareaRef}
           class="font-mono flex-1 resize-none whitespace-pre border-0 rounded-none bg-transparent py-2.5 px-3 text-[10.5px] leading-[1.55] [tab-size:2]"
           spellcheck="false"
+          aria-label="来源配置 JSON"
           value={configEditor.draftJson}
           oninput={handleInput}
           onkeydown={handleKeyDown}
@@ -414,7 +460,7 @@
       </div>
     {:else}
       <div class="read-view effective-view">
-        <div class="view-note">这是来源配置叠加客户端修改后，实际提交给内核的配置。</div>
+        <div class="view-note">{configEditor.runtime?.confirmed ? '此合成版本已通过运行身份与事务回执确认。' : '这是本地合成候选，尚未确认运行生效；不是已提交成功的运行配置。'}</div>
         <pre>{configEditor.effectiveJson}</pre>
       </div>
     {/if}
@@ -427,12 +473,22 @@
   <KernelSettingsTransfer />
 </div>
 
+<Dialog.Root bind:open={recoveryConfirm}>
+  <Dialog.Content class="workspace-recovery-confirm">
+    <Dialog.Header><Dialog.Title>完成原操作的本地发布？</Dialog.Title><Dialog.Description>只使用已检查的原操作及其冻结候选；不会重新预检、重新应用运行配置或重建 TUN。取消保留草稿与原屏障。</Dialog.Description></Dialog.Header>
+    <Dialog.Body><p class="operation-id">{reviewedPlanId}</p><p>来源、覆盖、规则或运行身份变化后，原检查失效，需重新核对。</p></Dialog.Body>
+    <Dialog.Footer><Button variant="outline" onclick={() => { recoveryConfirm = false; reviewedToken = null; reviewedPlanId = null; }}>取消</Button><Button disabled={!configEditor.canCompleteLocal || !reviewedToken || reviewedToken !== configEditor.recoveryReview?.reviewId || reviewedPlanId !== configEditor.recoveryReview?.planId} onclick={() => { const token = reviewedToken; recoveryConfirm = false; reviewedToken = null; reviewedPlanId = null; if (token) void configEditor.completeLocal(token); }}>确认完成本地发布</Button></Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
 <style>
   .panel {
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
+  .operation-id { overflow-wrap: anywhere; word-break: break-word; }
 
   .header {
     display: flex;
@@ -762,7 +818,7 @@
   }
 
   .workspace-tabs button {
-    height: 28px;
+    min-height: 44px;
     border: 0;
     border-radius: var(--radius-md);
     background: transparent;
@@ -809,6 +865,7 @@
   }
 
   .editor-container {
+    min-width: 0;
     display: flex;
     min-height: 360px;
     max-height: calc(100vh - 320px);
@@ -850,5 +907,18 @@
   .empty-text {
     font-size: 11px;
     color: var(--muted-foreground);
+  }
+  @media (max-width: 640px) {
+    .header, .status-bar, .runtime-card { flex-wrap: wrap; }
+    .runtime-main { flex-wrap: wrap; }
+    .runtime-card code { white-space: normal; overflow-wrap: anywhere; }
+    .status-left { flex-wrap: wrap; }
+    .actions-bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+    .actions-bar :global(button), .header :global(button) { min-height: 44px; min-width: 44px; }
+    .error-panel :global(button), :global(.workspace-recovery-confirm button) { min-height: 44px; min-width: 44px; }
+    .editor-container :global(textarea) { font-size: 16px; min-width: 0; }
+    .workspace-tabs button { font-size: 12px; }
+    .runtime-card, .error-panel, .panel { overflow-wrap: anywhere; }
+    .read-view pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   }
 </style>

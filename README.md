@@ -1,5 +1,7 @@
 # ZNet Sink
 
+移动开发验收：[Android Debug 安装与 USB 调试](docs/gui/android-debug-usb-v0.0.3.md)。
+
 <!-- 🚧 TODO: 添加截图或演示 GIF
 <p align="center">
   <img src="docs/assets/screenshot.png" alt="ZNet Sink 截图" width="800" />

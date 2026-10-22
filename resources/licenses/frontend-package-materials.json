@@ -1,0 +1,316 @@
+{
+  "schemaVersion": 1,
+  "packages": [
+    {
+      "identity": {
+        "ecosystem": "npm",
+        "name": "@tauri-apps/plugin-dialog",
+        "version": "2.7.2",
+        "source": "https://github.com/tauri-apps/plugins-workspace"
+      },
+      "expected": {
+        "manifestSha256": "d2ab4deac6ededb52a3833df5102ff008699db8c614efeda46bc3b9d30c4817d",
+        "lockIntegrity": "sha512-pX0IGm1I3I6wc+zeKYcq1GSqogK6okCNX5fOdaNU5ab1AjGS6l1E5wFNjEb7meg7ZFSp0JUs+0jQGQNyOvLrsg=="
+      },
+      "materials": [
+        {
+          "name": "LICENSE_MIT",
+          "kind": "license",
+          "source": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/03afae6d7275030a708eaedd39f0e604ccb901f3/plugins/dialog/LICENSE_MIT",
+          "sha256": "89ff9689dcf9dd53968785d05a26f7898bb169dbfcada8d032b3e68cf0d55607",
+          "text": "MIT License\n\nCopyright (c) 2017 - Present Tauri Apps Contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+          "origin": {
+            "url": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/03afae6d7275030a708eaedd39f0e604ccb901f3/plugins/dialog/LICENSE_MIT",
+            "sha256": "89ff9689dcf9dd53968785d05a26f7898bb169dbfcada8d032b3e68cf0d55607",
+            "revision": "03afae6d7275030a708eaedd39f0e604ccb901f3"
+          }
+        },
+        {
+          "name": "LICENSE_APACHE-2.0",
+          "kind": "license",
+          "source": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/03afae6d7275030a708eaedd39f0e604ccb901f3/plugins/dialog/LICENSE_APACHE-2.0",
+          "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9",
+          "text": "\n                                 Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      \"License\" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      \"Licensor\" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n      \"Legal Entity\" shall mean the union of the acting entity and all\n      other entities that control, are controlled by, or are under common\n      control with that entity. For the purposes of this definition,\n      \"control\" means (i) the power, direct or indirect, to cause the\n      direction or management of such entity, whether by contract or\n      otherwise, or (ii) ownership of fifty percent (50%) or more of the\n      outstanding shares, or (iii) beneficial ownership of such entity.\n\n      \"You\" (or \"Your\") shall mean an individual or Legal Entity\n      exercising permissions granted by this License.\n\n      \"Source\" form shall mean the preferred form for making modifications,\n      including but not limited to software source code, documentation\n      source, and configuration files.\n\n      \"Object\" form shall mean any form resulting from mechanical\n      transformation or translation of a Source form, including but\n      not limited to compiled object code, generated documentation,\n      and conversions to other media types.\n\n      \"Work\" shall mean the work of authorship, whether in Source or\n      Object form, made available under the License, as indicated by a\n      copyright notice that is included in or attached to the work\n      (an example is provided in the Appendix below).\n\n      \"Derivative Works\" shall mean any work, whether in Source or Object\n      form, that is based on (or derived from) the Work and for which the\n      editorial revisions, annotations, elaborations, or other modifications\n      represent, as a whole, an original work of authorship. For the purposes\n      of this License, Derivative Works shall not include works that remain\n      separable from, or merely link (or bind by name) to the interfaces of,\n      the Work and Derivative Works thereof.\n\n      \"Contribution\" shall mean any work of authorship, including\n      the original version of the Work and any modifications or additions\n      to that Work or Derivative Works thereof, that is intentionally\n      submitted to Licensor for inclusion in the Work by the copyright owner\n      or by an individual or Legal Entity authorized to submit on behalf of\n      the copyright owner. For the purposes of this definition, \"submitted\"\n      means any form of electronic, verbal, or written communication sent\n      to the Licensor or its representatives, including but not limited to\n      communication on electronic mailing lists, source code control systems,\n      and issue tracking systems that are managed by, or on behalf of, the\n      Licensor for the purpose of discussing and improving the Work, but\n      excluding communication that is conspicuously marked or otherwise\n      designated in writing by the copyright owner as \"Not a Contribution.\"\n\n      \"Contributor\" shall mean Licensor and any individual or Legal Entity\n      on behalf of whom a Contribution has been received by Licensor and\n      subsequently incorporated within the Work.\n\n   2. Grant of Copyright License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      copyright license to reproduce, prepare Derivative Works of,\n      publicly display, publicly perform, sublicense, and distribute the\n      Work and such Derivative Works in Source or Object form.\n\n   3. Grant of Patent License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      (except as stated in this section) patent license to make, have made,\n      use, offer to sell, sell, import, and otherwise transfer the Work,\n      where such license applies only to those patent claims licensable\n      by such Contributor that are necessarily infringed by their\n      Contribution(s) alone or by combination of their Contribution(s)\n      with the Work to which such Contribution(s) was submitted. If You\n      institute patent litigation against any entity (including a\n      cross-claim or counterclaim in a lawsuit) alleging that the Work\n      or a Contribution incorporated within the Work constitutes direct\n      or contributory patent infringement, then any patent licenses\n      granted to You under this License for that Work shall terminate\n      as of the date such litigation is filed.\n\n   4. Redistribution. You may reproduce and distribute copies of the\n      Work or Derivative Works thereof in any medium, with or without\n      modifications, and in Source or Object form, provided that You\n      meet the following conditions:\n\n      (a) You must give any other recipients of the Work or\n          Derivative Works a copy of this License; and\n\n      (b) You must cause any modified files to carry prominent notices\n          stating that You changed the files; and\n\n      (c) You must retain, in the Source form of any Derivative Works\n          that You distribute, all copyright, patent, trademark, and\n          attribution notices from the Source form of the Work,\n          excluding those notices that do not pertain to any part of\n          the Derivative Works; and\n\n      (d) If the Work includes a \"NOTICE\" text file as part of its\n          distribution, then any Derivative Works that You distribute must\n          include a readable copy of the attribution notices contained\n          within such NOTICE file, excluding those notices that do not\n          pertain to any part of the Derivative Works, in at least one\n          of the following places: within a NOTICE text file distributed\n          as part of the Derivative Works; within the Source form or\n          documentation, if provided along with the Derivative Works; or,\n          within a display generated by the Derivative Works, if and\n          wherever such third-party notices normally appear. The contents\n          of the NOTICE file are for informational purposes only and\n          do not modify the License. You may add Your own attribution\n          notices within Derivative Works that You distribute, alongside\n          or as an addendum to the NOTICE text from the Work, provided\n          that such additional attribution notices cannot be construed\n          as modifying the License.\n\n      You may add Your own copyright statement to Your modifications and\n      may provide additional or different license terms and conditions\n      for use, reproduction, or distribution of Your modifications, or\n      for any such Derivative Works as a whole, provided Your use,\n      reproduction, and distribution of the Work otherwise complies with\n      the conditions stated in this License.\n\n   5. Submission of Contributions. Unless You explicitly state otherwise,\n      any Contribution intentionally submitted for inclusion in the Work\n      by You to the Licensor shall be under the terms and conditions of\n      this License, without any additional terms or conditions.\n      Notwithstanding the above, nothing herein shall supersede or modify\n      the terms of any separate license agreement you may have executed\n      with Licensor regarding such Contributions.\n\n   6. Trademarks. This License does not grant permission to use the trade\n      names, trademarks, service marks, or product names of the Licensor,\n      except as required for reasonable and customary use in describing the\n      origin of the Work and reproducing the content of the NOTICE file.\n\n   7. Disclaimer of Warranty. Unless required by applicable law or\n      agreed to in writing, Licensor provides the Work (and each\n      Contributor provides its Contributions) on an \"AS IS\" BASIS,\n      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or\n      implied, including, without limitation, any warranties or conditions\n      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A\n      PARTICULAR PURPOSE. You are solely responsible for determining the\n      appropriateness of using or redistributing the Work and assume any\n      risks associated with Your exercise of permissions under this License.\n\n   8. Limitation of Liability. In no event and under no legal theory,\n      whether in tort (including negligence), contract, or otherwise,\n      unless required by applicable law (such as deliberate and grossly\n      negligent acts) or agreed to in writing, shall any Contributor be\n      liable to You for damages, including any direct, indirect, special,\n      incidental, or consequential damages of any character arising as a\n      result of this License or out of the use or inability to use the\n      Work (including but not limited to damages for loss of goodwill,\n      work stoppage, computer failure or malfunction, or any and all\n      other commercial damages or losses), even if such Contributor\n      has been advised of the possibility of such damages.\n\n   9. Accepting Warranty or Additional Liability. While redistributing\n      the Work or Derivative Works thereof, You may choose to offer,\n      and charge a fee for, acceptance of support, warranty, indemnity,\n      or other liability obligations and/or rights consistent with this\n      License. However, in accepting such obligations, You may act only\n      on Your own behalf and on Your sole responsibility, not on behalf\n      of any other Contributor, and only if You agree to indemnify,\n      defend, and hold each Contributor harmless for any liability\n      incurred by, or claims asserted against, such Contributor by reason\n      of your accepting any such warranty or additional liability.\n\n   END OF TERMS AND CONDITIONS",
+          "origin": {
+            "url": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/03afae6d7275030a708eaedd39f0e604ccb901f3/plugins/dialog/LICENSE_APACHE-2.0",
+            "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9",
+            "revision": "03afae6d7275030a708eaedd39f0e604ccb901f3"
+          }
+        },
+        {
+          "name": "dist-js/index.cjs copyright header",
+          "kind": "notice",
+          "source": "npm:@tauri-apps/plugin-dialog@2.7.2!package/dist-js/index.cjs",
+          "sha256": "98c42c9091f1696f44961a9798e2d9b45a76ff8318c8409565d93f0a6f1441b2",
+          "text": "// Copyright 2019-2023 Tauri Programme within The Commons Conservancy\n// SPDX-License-Identifier: Apache-2.0\n// SPDX-License-Identifier: MIT\n",
+          "origin": {
+            "url": "https://registry.npmjs.org/@tauri-apps/plugin-dialog/-/plugin-dialog-2.7.2.tgz",
+            "sha256": "7a5bb98ed104e6e6bec50bc3403af0d56fca80967d870055d753b3ca3e832c80",
+            "member": "package/dist-js/index.cjs",
+            "byteRange": [
+              60,
+              201
+            ]
+          }
+        },
+        {
+          "name": "dist-js/index.js copyright header",
+          "kind": "notice",
+          "source": "npm:@tauri-apps/plugin-dialog@2.7.2!package/dist-js/index.js",
+          "sha256": "98c42c9091f1696f44961a9798e2d9b45a76ff8318c8409565d93f0a6f1441b2",
+          "text": "// Copyright 2019-2023 Tauri Programme within The Commons Conservancy\n// SPDX-License-Identifier: Apache-2.0\n// SPDX-License-Identifier: MIT\n",
+          "origin": {
+            "url": "https://registry.npmjs.org/@tauri-apps/plugin-dialog/-/plugin-dialog-2.7.2.tgz",
+            "sha256": "7a5bb98ed104e6e6bec50bc3403af0d56fca80967d870055d753b3ca3e832c80",
+            "member": "package/dist-js/index.js",
+            "byteRange": [
+              48,
+              189
+            ]
+          }
+        }
+      ],
+      "resolves": [
+        "package-specific-legal-material-not-provided"
+      ],
+      "acquisition": {
+        "metadataUrl": "https://registry.npmjs.org/@tauri-apps%2fplugin-dialog/2.7.2",
+        "metadataSha256": "a92d2a94f47f203ed7f19916e989d020cec9f88b729f4b0af164d9dd18eaafbb",
+        "gitHead": "03afae6d7275030a708eaedd39f0e604ccb901f3",
+        "archiveUrl": "https://registry.npmjs.org/@tauri-apps/plugin-dialog/-/plugin-dialog-2.7.2.tgz",
+        "archiveSha256": "7a5bb98ed104e6e6bec50bc3403af0d56fca80967d870055d753b3ca3e832c80",
+        "verifiedArchiveIntegrity": "sha512-pX0IGm1I3I6wc+zeKYcq1GSqogK6okCNX5fOdaNU5ab1AjGS6l1E5wFNjEb7meg7ZFSp0JUs+0jQGQNyOvLrsg==",
+        "manifestMatchesInstalled": true,
+        "archiveLegalMembers": [
+          "package/LICENSE.spdx"
+        ],
+        "scope": "Complete npm archive legal-file names and source copyright headers inspected; exact published gitHead plugin directory supplies omitted license bodies. No license declaration or attribution copied from sibling packages.",
+        "sourceManifestUrl": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/03afae6d7275030a708eaedd39f0e604ccb901f3/plugins/dialog/package.json",
+        "sourceManifestSha256": "d2ab4deac6ededb52a3833df5102ff008699db8c614efeda46bc3b9d30c4817d"
+      }
+    },
+    {
+      "identity": {
+        "ecosystem": "npm",
+        "name": "@tauri-apps/plugin-process",
+        "version": "2.3.1",
+        "source": "https://github.com/tauri-apps/plugins-workspace"
+      },
+      "expected": {
+        "manifestSha256": "59c5810f3598128c3f478373dc17b019cd786d4da9a4d5ab5df3aebc1bb23bb3",
+        "lockIntegrity": "sha512-nCa4fGVaDL/B9ai03VyPOjfAHRHSBz5v6F/ObsB73r/dA3MHHhZtldaDMIc0V/pnUw9ehzr2iEG+XkSEyC0JJA=="
+      },
+      "materials": [
+        {
+          "name": "LICENSE_MIT",
+          "kind": "license",
+          "source": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/e7a68fa63755603b9fa12d28e077eea645551d24/plugins/process/LICENSE_MIT",
+          "sha256": "89ff9689dcf9dd53968785d05a26f7898bb169dbfcada8d032b3e68cf0d55607",
+          "text": "MIT License\n\nCopyright (c) 2017 - Present Tauri Apps Contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+          "origin": {
+            "url": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/e7a68fa63755603b9fa12d28e077eea645551d24/plugins/process/LICENSE_MIT",
+            "sha256": "89ff9689dcf9dd53968785d05a26f7898bb169dbfcada8d032b3e68cf0d55607",
+            "revision": "e7a68fa63755603b9fa12d28e077eea645551d24"
+          }
+        },
+        {
+          "name": "LICENSE_APACHE-2.0",
+          "kind": "license",
+          "source": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/e7a68fa63755603b9fa12d28e077eea645551d24/plugins/process/LICENSE_APACHE-2.0",
+          "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9",
+          "text": "\n                                 Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      \"License\" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      \"Licensor\" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n      \"Legal Entity\" shall mean the union of the acting entity and all\n      other entities that control, are controlled by, or are under common\n      control with that entity. For the purposes of this definition,\n      \"control\" means (i) the power, direct or indirect, to cause the\n      direction or management of such entity, whether by contract or\n      otherwise, or (ii) ownership of fifty percent (50%) or more of the\n      outstanding shares, or (iii) beneficial ownership of such entity.\n\n      \"You\" (or \"Your\") shall mean an individual or Legal Entity\n      exercising permissions granted by this License.\n\n      \"Source\" form shall mean the preferred form for making modifications,\n      including but not limited to software source code, documentation\n      source, and configuration files.\n\n      \"Object\" form shall mean any form resulting from mechanical\n      transformation or translation of a Source form, including but\n      not limited to compiled object code, generated documentation,\n      and conversions to other media types.\n\n      \"Work\" shall mean the work of authorship, whether in Source or\n      Object form, made available under the License, as indicated by a\n      copyright notice that is included in or attached to the work\n      (an example is provided in the Appendix below).\n\n      \"Derivative Works\" shall mean any work, whether in Source or Object\n      form, that is based on (or derived from) the Work and for which the\n      editorial revisions, annotations, elaborations, or other modifications\n      represent, as a whole, an original work of authorship. For the purposes\n      of this License, Derivative Works shall not include works that remain\n      separable from, or merely link (or bind by name) to the interfaces of,\n      the Work and Derivative Works thereof.\n\n      \"Contribution\" shall mean any work of authorship, including\n      the original version of the Work and any modifications or additions\n      to that Work or Derivative Works thereof, that is intentionally\n      submitted to Licensor for inclusion in the Work by the copyright owner\n      or by an individual or Legal Entity authorized to submit on behalf of\n      the copyright owner. For the purposes of this definition, \"submitted\"\n      means any form of electronic, verbal, or written communication sent\n      to the Licensor or its representatives, including but not limited to\n      communication on electronic mailing lists, source code control systems,\n      and issue tracking systems that are managed by, or on behalf of, the\n      Licensor for the purpose of discussing and improving the Work, but\n      excluding communication that is conspicuously marked or otherwise\n      designated in writing by the copyright owner as \"Not a Contribution.\"\n\n      \"Contributor\" shall mean Licensor and any individual or Legal Entity\n      on behalf of whom a Contribution has been received by Licensor and\n      subsequently incorporated within the Work.\n\n   2. Grant of Copyright License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      copyright license to reproduce, prepare Derivative Works of,\n      publicly display, publicly perform, sublicense, and distribute the\n      Work and such Derivative Works in Source or Object form.\n\n   3. Grant of Patent License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      (except as stated in this section) patent license to make, have made,\n      use, offer to sell, sell, import, and otherwise transfer the Work,\n      where such license applies only to those patent claims licensable\n      by such Contributor that are necessarily infringed by their\n      Contribution(s) alone or by combination of their Contribution(s)\n      with the Work to which such Contribution(s) was submitted. If You\n      institute patent litigation against any entity (including a\n      cross-claim or counterclaim in a lawsuit) alleging that the Work\n      or a Contribution incorporated within the Work constitutes direct\n      or contributory patent infringement, then any patent licenses\n      granted to You under this License for that Work shall terminate\n      as of the date such litigation is filed.\n\n   4. Redistribution. You may reproduce and distribute copies of the\n      Work or Derivative Works thereof in any medium, with or without\n      modifications, and in Source or Object form, provided that You\n      meet the following conditions:\n\n      (a) You must give any other recipients of the Work or\n          Derivative Works a copy of this License; and\n\n      (b) You must cause any modified files to carry prominent notices\n          stating that You changed the files; and\n\n      (c) You must retain, in the Source form of any Derivative Works\n          that You distribute, all copyright, patent, trademark, and\n          attribution notices from the Source form of the Work,\n          excluding those notices that do not pertain to any part of\n          the Derivative Works; and\n\n      (d) If the Work includes a \"NOTICE\" text file as part of its\n          distribution, then any Derivative Works that You distribute must\n          include a readable copy of the attribution notices contained\n          within such NOTICE file, excluding those notices that do not\n          pertain to any part of the Derivative Works, in at least one\n          of the following places: within a NOTICE text file distributed\n          as part of the Derivative Works; within the Source form or\n          documentation, if provided along with the Derivative Works; or,\n          within a display generated by the Derivative Works, if and\n          wherever such third-party notices normally appear. The contents\n          of the NOTICE file are for informational purposes only and\n          do not modify the License. You may add Your own attribution\n          notices within Derivative Works that You distribute, alongside\n          or as an addendum to the NOTICE text from the Work, provided\n          that such additional attribution notices cannot be construed\n          as modifying the License.\n\n      You may add Your own copyright statement to Your modifications and\n      may provide additional or different license terms and conditions\n      for use, reproduction, or distribution of Your modifications, or\n      for any such Derivative Works as a whole, provided Your use,\n      reproduction, and distribution of the Work otherwise complies with\n      the conditions stated in this License.\n\n   5. Submission of Contributions. Unless You explicitly state otherwise,\n      any Contribution intentionally submitted for inclusion in the Work\n      by You to the Licensor shall be under the terms and conditions of\n      this License, without any additional terms or conditions.\n      Notwithstanding the above, nothing herein shall supersede or modify\n      the terms of any separate license agreement you may have executed\n      with Licensor regarding such Contributions.\n\n   6. Trademarks. This License does not grant permission to use the trade\n      names, trademarks, service marks, or product names of the Licensor,\n      except as required for reasonable and customary use in describing the\n      origin of the Work and reproducing the content of the NOTICE file.\n\n   7. Disclaimer of Warranty. Unless required by applicable law or\n      agreed to in writing, Licensor provides the Work (and each\n      Contributor provides its Contributions) on an \"AS IS\" BASIS,\n      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or\n      implied, including, without limitation, any warranties or conditions\n      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A\n      PARTICULAR PURPOSE. You are solely responsible for determining the\n      appropriateness of using or redistributing the Work and assume any\n      risks associated with Your exercise of permissions under this License.\n\n   8. Limitation of Liability. In no event and under no legal theory,\n      whether in tort (including negligence), contract, or otherwise,\n      unless required by applicable law (such as deliberate and grossly\n      negligent acts) or agreed to in writing, shall any Contributor be\n      liable to You for damages, including any direct, indirect, special,\n      incidental, or consequential damages of any character arising as a\n      result of this License or out of the use or inability to use the\n      Work (including but not limited to damages for loss of goodwill,\n      work stoppage, computer failure or malfunction, or any and all\n      other commercial damages or losses), even if such Contributor\n      has been advised of the possibility of such damages.\n\n   9. Accepting Warranty or Additional Liability. While redistributing\n      the Work or Derivative Works thereof, You may choose to offer,\n      and charge a fee for, acceptance of support, warranty, indemnity,\n      or other liability obligations and/or rights consistent with this\n      License. However, in accepting such obligations, You may act only\n      on Your own behalf and on Your sole responsibility, not on behalf\n      of any other Contributor, and only if You agree to indemnify,\n      defend, and hold each Contributor harmless for any liability\n      incurred by, or claims asserted against, such Contributor by reason\n      of your accepting any such warranty or additional liability.\n\n   END OF TERMS AND CONDITIONS",
+          "origin": {
+            "url": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/e7a68fa63755603b9fa12d28e077eea645551d24/plugins/process/LICENSE_APACHE-2.0",
+            "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9",
+            "revision": "e7a68fa63755603b9fa12d28e077eea645551d24"
+          }
+        },
+        {
+          "name": "dist-js/index.cjs copyright header",
+          "kind": "notice",
+          "source": "npm:@tauri-apps/plugin-process@2.3.1!package/dist-js/index.cjs",
+          "sha256": "98c42c9091f1696f44961a9798e2d9b45a76ff8318c8409565d93f0a6f1441b2",
+          "text": "// Copyright 2019-2023 Tauri Programme within The Commons Conservancy\n// SPDX-License-Identifier: Apache-2.0\n// SPDX-License-Identifier: MIT\n",
+          "origin": {
+            "url": "https://registry.npmjs.org/@tauri-apps/plugin-process/-/plugin-process-2.3.1.tgz",
+            "sha256": "82c5537eedc54ddb3ba2929d8d7dc343b51b898a49aa9ca2949666956aec859c",
+            "member": "package/dist-js/index.cjs",
+            "byteRange": [
+              60,
+              201
+            ]
+          }
+        },
+        {
+          "name": "dist-js/index.js copyright header",
+          "kind": "notice",
+          "source": "npm:@tauri-apps/plugin-process@2.3.1!package/dist-js/index.js",
+          "sha256": "98c42c9091f1696f44961a9798e2d9b45a76ff8318c8409565d93f0a6f1441b2",
+          "text": "// Copyright 2019-2023 Tauri Programme within The Commons Conservancy\n// SPDX-License-Identifier: Apache-2.0\n// SPDX-License-Identifier: MIT\n",
+          "origin": {
+            "url": "https://registry.npmjs.org/@tauri-apps/plugin-process/-/plugin-process-2.3.1.tgz",
+            "sha256": "82c5537eedc54ddb3ba2929d8d7dc343b51b898a49aa9ca2949666956aec859c",
+            "member": "package/dist-js/index.js",
+            "byteRange": [
+              48,
+              189
+            ]
+          }
+        }
+      ],
+      "resolves": [
+        "package-specific-legal-material-not-provided"
+      ],
+      "acquisition": {
+        "metadataUrl": "https://registry.npmjs.org/@tauri-apps%2fplugin-process/2.3.1",
+        "metadataSha256": "70ae8dc4f3af36d19921d3b45dcabde844ecbbeb1e9fc9e7ac901a0f3ad4193f",
+        "gitHead": "e7a68fa63755603b9fa12d28e077eea645551d24",
+        "archiveUrl": "https://registry.npmjs.org/@tauri-apps/plugin-process/-/plugin-process-2.3.1.tgz",
+        "archiveSha256": "82c5537eedc54ddb3ba2929d8d7dc343b51b898a49aa9ca2949666956aec859c",
+        "verifiedArchiveIntegrity": "sha512-nCa4fGVaDL/B9ai03VyPOjfAHRHSBz5v6F/ObsB73r/dA3MHHhZtldaDMIc0V/pnUw9ehzr2iEG+XkSEyC0JJA==",
+        "manifestMatchesInstalled": true,
+        "archiveLegalMembers": [
+          "package/LICENSE.spdx"
+        ],
+        "scope": "Complete npm archive legal-file names and source copyright headers inspected; exact published gitHead plugin directory supplies omitted license bodies. No license declaration or attribution copied from sibling packages.",
+        "sourceManifestUrl": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/e7a68fa63755603b9fa12d28e077eea645551d24/plugins/process/package.json",
+        "sourceManifestSha256": "59c5810f3598128c3f478373dc17b019cd786d4da9a4d5ab5df3aebc1bb23bb3"
+      }
+    },
+    {
+      "identity": {
+        "ecosystem": "npm",
+        "name": "@tauri-apps/plugin-updater",
+        "version": "2.10.1",
+        "source": "https://github.com/tauri-apps/plugins-workspace"
+      },
+      "expected": {
+        "manifestSha256": "31addd6dc8f7929925ed857046ad66bcc1cbf56fd153d117ed2e1d81839f6878",
+        "lockIntegrity": "sha512-NFYMg+tWOZPJdzE/PpFj2qfqwAWwNS3kXrb1tm1gnBJ9mYzZ4WDRrwy8udzWoAnfGCHLuePNLY1WVCNHnh3eRA=="
+      },
+      "materials": [
+        {
+          "name": "LICENSE_MIT",
+          "kind": "license",
+          "source": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/d6a3898001a4bcc659e045f9501498751b77dbe6/plugins/updater/LICENSE_MIT",
+          "sha256": "89ff9689dcf9dd53968785d05a26f7898bb169dbfcada8d032b3e68cf0d55607",
+          "text": "MIT License\n\nCopyright (c) 2017 - Present Tauri Apps Contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+          "origin": {
+            "url": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/d6a3898001a4bcc659e045f9501498751b77dbe6/plugins/updater/LICENSE_MIT",
+            "sha256": "89ff9689dcf9dd53968785d05a26f7898bb169dbfcada8d032b3e68cf0d55607",
+            "revision": "d6a3898001a4bcc659e045f9501498751b77dbe6"
+          }
+        },
+        {
+          "name": "LICENSE_APACHE-2.0",
+          "kind": "license",
+          "source": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/d6a3898001a4bcc659e045f9501498751b77dbe6/plugins/updater/LICENSE_APACHE-2.0",
+          "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9",
+          "text": "\n                                 Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      \"License\" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      \"Licensor\" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n      \"Legal Entity\" shall mean the union of the acting entity and all\n      other entities that control, are controlled by, or are under common\n      control with that entity. For the purposes of this definition,\n      \"control\" means (i) the power, direct or indirect, to cause the\n      direction or management of such entity, whether by contract or\n      otherwise, or (ii) ownership of fifty percent (50%) or more of the\n      outstanding shares, or (iii) beneficial ownership of such entity.\n\n      \"You\" (or \"Your\") shall mean an individual or Legal Entity\n      exercising permissions granted by this License.\n\n      \"Source\" form shall mean the preferred form for making modifications,\n      including but not limited to software source code, documentation\n      source, and configuration files.\n\n      \"Object\" form shall mean any form resulting from mechanical\n      transformation or translation of a Source form, including but\n      not limited to compiled object code, generated documentation,\n      and conversions to other media types.\n\n      \"Work\" shall mean the work of authorship, whether in Source or\n      Object form, made available under the License, as indicated by a\n      copyright notice that is included in or attached to the work\n      (an example is provided in the Appendix below).\n\n      \"Derivative Works\" shall mean any work, whether in Source or Object\n      form, that is based on (or derived from) the Work and for which the\n      editorial revisions, annotations, elaborations, or other modifications\n      represent, as a whole, an original work of authorship. For the purposes\n      of this License, Derivative Works shall not include works that remain\n      separable from, or merely link (or bind by name) to the interfaces of,\n      the Work and Derivative Works thereof.\n\n      \"Contribution\" shall mean any work of authorship, including\n      the original version of the Work and any modifications or additions\n      to that Work or Derivative Works thereof, that is intentionally\n      submitted to Licensor for inclusion in the Work by the copyright owner\n      or by an individual or Legal Entity authorized to submit on behalf of\n      the copyright owner. For the purposes of this definition, \"submitted\"\n      means any form of electronic, verbal, or written communication sent\n      to the Licensor or its representatives, including but not limited to\n      communication on electronic mailing lists, source code control systems,\n      and issue tracking systems that are managed by, or on behalf of, the\n      Licensor for the purpose of discussing and improving the Work, but\n      excluding communication that is conspicuously marked or otherwise\n      designated in writing by the copyright owner as \"Not a Contribution.\"\n\n      \"Contributor\" shall mean Licensor and any individual or Legal Entity\n      on behalf of whom a Contribution has been received by Licensor and\n      subsequently incorporated within the Work.\n\n   2. Grant of Copyright License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      copyright license to reproduce, prepare Derivative Works of,\n      publicly display, publicly perform, sublicense, and distribute the\n      Work and such Derivative Works in Source or Object form.\n\n   3. Grant of Patent License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      (except as stated in this section) patent license to make, have made,\n      use, offer to sell, sell, import, and otherwise transfer the Work,\n      where such license applies only to those patent claims licensable\n      by such Contributor that are necessarily infringed by their\n      Contribution(s) alone or by combination of their Contribution(s)\n      with the Work to which such Contribution(s) was submitted. If You\n      institute patent litigation against any entity (including a\n      cross-claim or counterclaim in a lawsuit) alleging that the Work\n      or a Contribution incorporated within the Work constitutes direct\n      or contributory patent infringement, then any patent licenses\n      granted to You under this License for that Work shall terminate\n      as of the date such litigation is filed.\n\n   4. Redistribution. You may reproduce and distribute copies of the\n      Work or Derivative Works thereof in any medium, with or without\n      modifications, and in Source or Object form, provided that You\n      meet the following conditions:\n\n      (a) You must give any other recipients of the Work or\n          Derivative Works a copy of this License; and\n\n      (b) You must cause any modified files to carry prominent notices\n          stating that You changed the files; and\n\n      (c) You must retain, in the Source form of any Derivative Works\n          that You distribute, all copyright, patent, trademark, and\n          attribution notices from the Source form of the Work,\n          excluding those notices that do not pertain to any part of\n          the Derivative Works; and\n\n      (d) If the Work includes a \"NOTICE\" text file as part of its\n          distribution, then any Derivative Works that You distribute must\n          include a readable copy of the attribution notices contained\n          within such NOTICE file, excluding those notices that do not\n          pertain to any part of the Derivative Works, in at least one\n          of the following places: within a NOTICE text file distributed\n          as part of the Derivative Works; within the Source form or\n          documentation, if provided along with the Derivative Works; or,\n          within a display generated by the Derivative Works, if and\n          wherever such third-party notices normally appear. The contents\n          of the NOTICE file are for informational purposes only and\n          do not modify the License. You may add Your own attribution\n          notices within Derivative Works that You distribute, alongside\n          or as an addendum to the NOTICE text from the Work, provided\n          that such additional attribution notices cannot be construed\n          as modifying the License.\n\n      You may add Your own copyright statement to Your modifications and\n      may provide additional or different license terms and conditions\n      for use, reproduction, or distribution of Your modifications, or\n      for any such Derivative Works as a whole, provided Your use,\n      reproduction, and distribution of the Work otherwise complies with\n      the conditions stated in this License.\n\n   5. Submission of Contributions. Unless You explicitly state otherwise,\n      any Contribution intentionally submitted for inclusion in the Work\n      by You to the Licensor shall be under the terms and conditions of\n      this License, without any additional terms or conditions.\n      Notwithstanding the above, nothing herein shall supersede or modify\n      the terms of any separate license agreement you may have executed\n      with Licensor regarding such Contributions.\n\n   6. Trademarks. This License does not grant permission to use the trade\n      names, trademarks, service marks, or product names of the Licensor,\n      except as required for reasonable and customary use in describing the\n      origin of the Work and reproducing the content of the NOTICE file.\n\n   7. Disclaimer of Warranty. Unless required by applicable law or\n      agreed to in writing, Licensor provides the Work (and each\n      Contributor provides its Contributions) on an \"AS IS\" BASIS,\n      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or\n      implied, including, without limitation, any warranties or conditions\n      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A\n      PARTICULAR PURPOSE. You are solely responsible for determining the\n      appropriateness of using or redistributing the Work and assume any\n      risks associated with Your exercise of permissions under this License.\n\n   8. Limitation of Liability. In no event and under no legal theory,\n      whether in tort (including negligence), contract, or otherwise,\n      unless required by applicable law (such as deliberate and grossly\n      negligent acts) or agreed to in writing, shall any Contributor be\n      liable to You for damages, including any direct, indirect, special,\n      incidental, or consequential damages of any character arising as a\n      result of this License or out of the use or inability to use the\n      Work (including but not limited to damages for loss of goodwill,\n      work stoppage, computer failure or malfunction, or any and all\n      other commercial damages or losses), even if such Contributor\n      has been advised of the possibility of such damages.\n\n   9. Accepting Warranty or Additional Liability. While redistributing\n      the Work or Derivative Works thereof, You may choose to offer,\n      and charge a fee for, acceptance of support, warranty, indemnity,\n      or other liability obligations and/or rights consistent with this\n      License. However, in accepting such obligations, You may act only\n      on Your own behalf and on Your sole responsibility, not on behalf\n      of any other Contributor, and only if You agree to indemnify,\n      defend, and hold each Contributor harmless for any liability\n      incurred by, or claims asserted against, such Contributor by reason\n      of your accepting any such warranty or additional liability.\n\n   END OF TERMS AND CONDITIONS",
+          "origin": {
+            "url": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/d6a3898001a4bcc659e045f9501498751b77dbe6/plugins/updater/LICENSE_APACHE-2.0",
+            "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9",
+            "revision": "d6a3898001a4bcc659e045f9501498751b77dbe6"
+          }
+        },
+        {
+          "name": "dist-js/index.cjs copyright header",
+          "kind": "notice",
+          "source": "npm:@tauri-apps/plugin-updater@2.10.1!package/dist-js/index.cjs",
+          "sha256": "98c42c9091f1696f44961a9798e2d9b45a76ff8318c8409565d93f0a6f1441b2",
+          "text": "// Copyright 2019-2023 Tauri Programme within The Commons Conservancy\n// SPDX-License-Identifier: Apache-2.0\n// SPDX-License-Identifier: MIT\n",
+          "origin": {
+            "url": "https://registry.npmjs.org/@tauri-apps/plugin-updater/-/plugin-updater-2.10.1.tgz",
+            "sha256": "f2a8f4c124abb801c229ba2e160abcf792edf09c044a6431b38a8d68b8d2b944",
+            "member": "package/dist-js/index.cjs",
+            "byteRange": [
+              60,
+              201
+            ]
+          }
+        },
+        {
+          "name": "dist-js/index.js copyright header",
+          "kind": "notice",
+          "source": "npm:@tauri-apps/plugin-updater@2.10.1!package/dist-js/index.js",
+          "sha256": "98c42c9091f1696f44961a9798e2d9b45a76ff8318c8409565d93f0a6f1441b2",
+          "text": "// Copyright 2019-2023 Tauri Programme within The Commons Conservancy\n// SPDX-License-Identifier: Apache-2.0\n// SPDX-License-Identifier: MIT\n",
+          "origin": {
+            "url": "https://registry.npmjs.org/@tauri-apps/plugin-updater/-/plugin-updater-2.10.1.tgz",
+            "sha256": "f2a8f4c124abb801c229ba2e160abcf792edf09c044a6431b38a8d68b8d2b944",
+            "member": "package/dist-js/index.js",
+            "byteRange": [
+              67,
+              208
+            ]
+          }
+        }
+      ],
+      "resolves": [
+        "package-specific-legal-material-not-provided"
+      ],
+      "acquisition": {
+        "metadataUrl": "https://registry.npmjs.org/@tauri-apps%2fplugin-updater/2.10.1",
+        "metadataSha256": "a8df0ba5cd0c4b6a61e8161b3cf4ef8cb3868d72a7a356f0bad463f091d6a672",
+        "gitHead": "d6a3898001a4bcc659e045f9501498751b77dbe6",
+        "archiveUrl": "https://registry.npmjs.org/@tauri-apps/plugin-updater/-/plugin-updater-2.10.1.tgz",
+        "archiveSha256": "f2a8f4c124abb801c229ba2e160abcf792edf09c044a6431b38a8d68b8d2b944",
+        "verifiedArchiveIntegrity": "sha512-NFYMg+tWOZPJdzE/PpFj2qfqwAWwNS3kXrb1tm1gnBJ9mYzZ4WDRrwy8udzWoAnfGCHLuePNLY1WVCNHnh3eRA==",
+        "manifestMatchesInstalled": true,
+        "archiveLegalMembers": [
+          "package/LICENSE.spdx"
+        ],
+        "scope": "Complete npm archive legal-file names and source copyright headers inspected; exact published gitHead plugin directory supplies omitted license bodies. No license declaration or attribution copied from sibling packages.",
+        "sourceManifestUrl": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/d6a3898001a4bcc659e045f9501498751b77dbe6/plugins/updater/package.json",
+        "sourceManifestSha256": "31addd6dc8f7929925ed857046ad66bcc1cbf56fd153d117ed2e1d81839f6878"
+      }
+    },
+    {
+      "identity": {
+        "ecosystem": "npm",
+        "name": "svelte-toolbelt",
+        "version": "0.10.6",
+        "source": "npm:svelte-toolbelt@0.10.6"
+      },
+      "expected": {
+        "manifestSha256": "b0dd8c15c05e68d20b0642f9bfd72ef07740a8e6fa8e4838baeed9cb7d0ef69b",
+        "lockIntegrity": "sha512-YWuX+RE+CnWYx09yseAe4ZVMM7e7GRFZM6OYWpBKOb++s+SQ8RBIMMe+Bs/CznBMc0QPLjr+vDBxTAkozXsFXQ=="
+      },
+      "resolves": [],
+      "materials": [
+        {
+          "name": "LICENSE (published MIT text)",
+          "kind": "license",
+          "source": "https://registry.npmjs.org/svelte-toolbelt/-/svelte-toolbelt-0.10.6.tgz#package/LICENSE",
+          "sha256": "8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b",
+          "text": "MIT License\n\nCopyright (c) 2024 Hunter Johnston <https://github.com/huntabyte>\nCopyright (c) 2024 Thomas G. Lopes <https://github.com/tglide>\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
+          "origin": {
+            "url": "https://registry.npmjs.org/svelte-toolbelt/-/svelte-toolbelt-0.10.6.tgz",
+            "sha256": "37e3a20a2a45bd494329279c57a157356b9103bc9fe5059fca23aecef39895ca",
+            "member": "package/LICENSE"
+          }
+        }
+      ],
+      "reviewedLicenseMapping": {
+        "expression": "MIT",
+        "basis": "reviewed-package-license-text",
+        "manifestDeclared": false,
+        "materialSha256": "8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b"
+      },
+      "acquisition": {
+        "kind": "locked-npm-archive-and-installed-byte-comparison",
+        "archiveSha256": "37e3a20a2a45bd494329279c57a157356b9103bc9fe5059fca23aecef39895ca",
+        "lockIntegrity": "sha512-YWuX+RE+CnWYx09yseAe4ZVMM7e7GRFZM6OYWpBKOb++s+SQ8RBIMMe+Bs/CznBMc0QPLjr+vDBxTAkozXsFXQ==",
+        "metadata": {
+          "url": "https://registry.npmjs.org/svelte-toolbelt/0.10.6",
+          "sha256": "58821220ecf6744b377dd9ebaa4c6f01a5a84bee3c094fbecf3168a980a2ff36"
+        },
+        "compared": [
+          "package/package.json",
+          "package/LICENSE"
+        ],
+        "limitations": "The exact published LICENSE explicitly says MIT License and provides its own copyright notices. This is a reviewed SPDX mapping of that text, not a package.json declaration. The manifest declaration gap and final-link retention limits remain."
+      }
+    }
+  ]
+}

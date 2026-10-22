@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Local mobile UI IO; no desktop updater, tray, process or desktop paths",
+  "windows": ["main"],
+  "platforms": ["android", "iOS"],
+  "permissions": ["core:default", "dialog:default", "opener:default"]
+}

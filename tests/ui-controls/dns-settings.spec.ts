@@ -51,6 +51,32 @@ test('confirmed missing rules still block applying DNS configuration', async ({ 
   await expect(page.getByRole('button', { name: '保存并应用', exact: true })).toBeDisabled();
 });
 
+test('mobile DNS rule management keeps the host navigation stack and dirty draft guard', async ({page})=>{
+  await page.setViewportSize({width:320,height:740});
+  await page.goto('/mobile.html?panel=dns&mode=rule-read-failure');
+  await page.getByRole('navigation',{name:'主导航'}).getByRole('button',{name:'更多',exact:true}).click();
+  await page.getByRole('button',{name:'设置',exact:true}).click();
+  await page.getByRole('button',{name:'DNS',exact:true}).click();
+  await expect(page.getByText('规则集引用暂未确认：Rule inventory unavailable')).toBeVisible();
+  await page.getByRole('radio',{name:'Fake-IP',exact:true}).click();
+  await page.getByRole('button',{name:'管理规则集',exact:true}).click();
+  const confirmation=page.getByRole('dialog',{name:'放弃未保存的设置？',exact:true});
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button',{name:'继续编辑',exact:true}).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.locator('.secondary-pane:not(.inactive) .secondary-header h1')).toHaveText('DNS');
+  await expect(page.getByRole('radio',{name:'Fake-IP',exact:true})).toHaveAttribute('aria-checked','true');
+  await page.getByRole('button',{name:'管理规则集',exact:true}).click();
+  await confirmation.getByRole('button',{name:'放弃修改',exact:true}).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.locator('.secondary-pane:not(.inactive) .secondary-header h1')).toHaveText('路由与规则集');
+  await page.getByRole('button',{name:'返回',exact:true}).click();
+  await expect(page.locator('.secondary-pane:not(.inactive) .secondary-header h1')).toHaveText('DNS');
+  await expect(page.getByRole('radio',{name:'Fake-IP',exact:true})).toHaveAttribute('aria-checked','false');
+  await expect(page.getByRole('button',{name:'重命名 wg-a-dns',exact:true})).toBeVisible();
+  await expect(page.getByRole('navigation',{name:'主导航'}).getByRole('button')).toHaveCount(4);
+});
+
 test('DNS dispatch can select client-managed and subscription rule sets and save their stable tags', async ({ page }) => {
   await page.goto('/?panel=dns&mode=client-dns-rules', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: '新增 DNS 分流', exact: true }).click();

@@ -13,6 +13,21 @@ const MIN_PERSISTED_LOG_ENTRIES: usize = 5_000;
 const LOG_ROTATE_EVERY: u64 = 100;
 static LOG_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+pub(crate) fn storage(limit: usize) -> super::local_data::LocalStoreStorage {
+    let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
+    super::local_data::inspect(
+        "logs",
+        data_dir().map(|root| {
+            let paths = vec![root.join(LOGS_FILE)];
+            (root, paths)
+        }),
+        None,
+        Some(persisted_limit(limit)),
+        None,
+        "append-rotation",
+    )
+}
+
 pub(crate) fn load_recent(limit: usize) -> AppResult<Vec<LogEntry>> {
     let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
     load_recent_from_path(&logs_path()?, limit)
@@ -26,6 +41,63 @@ pub(crate) fn append(entry: &LogEntry, limit: usize) -> AppResult<()> {
         rotate_path(&path, persisted_limit(limit))?;
     }
     Ok(())
+}
+
+/// Read only fixed IDs from authoritative private JSONL; bound the retained
+/// result and each decoded line. Oversized/malformed selected rows fail closed
+/// through a missing identity rather than copying their arbitrary body.
+pub(crate) fn read_selection(ids: &std::collections::BTreeSet<u64>) -> AppResult<Vec<LogEntry>> {
+    use std::io::BufRead as _;
+    let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
+    let path = logs_path()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = fs::File::open(path).map_err(|_| AppError::internal("日志读取失败，原列表保留"))?;
+    let mut reader = BufReader::new(file);
+    let mut rows = BTreeMap::new();
+    loop {
+        let mut line = Vec::new();
+        let mut oversized = false;
+        loop {
+            let buffer = reader
+                .fill_buf()
+                .map_err(|_| AppError::internal("日志读取失败，原列表保留"))?;
+            if buffer.is_empty() {
+                break;
+            }
+            let count = buffer
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(buffer.len(), |index| index + 1);
+            let ended = buffer[count - 1] == b'\n';
+            if !oversized {
+                if line.len().saturating_add(count) > 2 * 1024 * 1024 {
+                    oversized = true;
+                    line.clear();
+                } else {
+                    line.extend_from_slice(&buffer[..count]);
+                }
+            }
+            reader.consume(count);
+            if ended {
+                break;
+            }
+        }
+        if !oversized && line.is_empty() {
+            break;
+        }
+        if oversized {
+            continue;
+        }
+        if let Ok(mut entry) = serde_json::from_slice::<LogEntry>(&line) {
+            if ids.contains(&entry.id) {
+                repair_log_entry(&mut entry);
+                rows.insert(entry.id, entry);
+            }
+        }
+    }
+    Ok(rows.into_values().collect())
 }
 
 pub(crate) fn rotate(limit: usize) -> AppResult<()> {
@@ -282,7 +354,28 @@ pub fn rotate_path(path: &Path, limit: usize) -> AppResult<()> {
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_LOG_PATH: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+/// Exercise actual writers without process-wide environment changes or sharing
+/// a history file with concurrent tests. Never compiled into application builds.
+#[cfg(test)]
+pub(crate) fn with_test_path<T>(path: &Path, action: impl FnOnce() -> T) -> T {
+    struct Restore(Option<PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_LOG_PATH.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(TEST_LOG_PATH.with(|slot| slot.replace(Some(path.to_owned()))));
+    action()
+}
 fn logs_path() -> AppResult<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_LOG_PATH.with(|slot| slot.borrow().clone()) {
+        return Ok(path);
+    }
     Ok(data_dir()?.join(LOGS_FILE))
 }
 
@@ -308,6 +401,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id,
                     source,
                     level: LogLevel::Info,
@@ -344,6 +438,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id,
                     source: LogSource::App,
                     level: LogLevel::Info,
@@ -373,6 +468,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id,
                     source: LogSource::Core,
                     level: LogLevel::Error,
@@ -407,6 +503,7 @@ mod tests {
         append_to_path(
             &path,
             &LogEntry {
+                diagnostic_event: None,
                 id: 1,
                 source: LogSource::App,
                 level: LogLevel::Info,
@@ -433,6 +530,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id,
                     source: if id % 2 == 0 {
                         LogSource::Core
@@ -486,6 +584,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id,
                     source: LogSource::App,
                     level: LogLevel::Info,
@@ -542,6 +641,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id: index as u64 + 1,
                     source: LogSource::Core,
                     level,
@@ -585,6 +685,7 @@ mod tests {
         append_to_path(
             &path,
             &LogEntry {
+                diagnostic_event: None,
                 id: 1,
                 source: LogSource::Core,
                 level: LogLevel::Info,
@@ -611,6 +712,7 @@ mod tests {
         append_to_path(
             &path,
             &LogEntry {
+                diagnostic_event: None,
                 id: 1,
                 source: LogSource::App,
                 level: LogLevel::Info,
@@ -629,6 +731,7 @@ mod tests {
         append_to_path(
             &path,
             &LogEntry {
+                diagnostic_event: None,
                 id: 2,
                 source: LogSource::Core,
                 level: LogLevel::Error,
@@ -646,5 +749,86 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn closed_host_events_roundtrip_through_real_jsonl_and_rotation() {
+        use crate::models::logs::{HostDiagnosticEvent as Event, ProcessEvent};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("logs.jsonl");
+        for id in 1..=3 {
+            let entry = LogEntry {
+                id,
+                source: LogSource::App,
+                level: LogLevel::Info,
+                message: "private-original-canary".into(),
+                fields: Some(serde_json::json!({"opaque":"private-field-canary"})),
+                occurred_at_unix_ms: id,
+                diagnostic_event: Some(Event::Process(ProcessEvent::Started)),
+            };
+            append_to_path(&path, &entry).unwrap();
+        }
+        rotate_path(&path, 2).unwrap();
+        let reopened = load_recent_from_path(&path, 10).unwrap();
+        assert_eq!(
+            reopened.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert!(reopened
+            .iter()
+            .all(|entry| entry.diagnostic_event == Some(Event::Process(ProcessEvent::Started))));
+        let page = query_page_from_path(&path, &LogQuery::default()).unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert!(page
+            .items
+            .iter()
+            .all(|entry| entry.diagnostic_event.is_some()));
+    }
+    #[test]
+    fn unknown_malformed_and_legacy_classification_preserve_history_without_promotion() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("logs.jsonl");
+        for (index, classification) in [
+            serde_json::Value::Null,
+            serde_json::json!("secret-canary"),
+            serde_json::json!({"kind":"future-secret-canary","event":"started"}),
+            serde_json::json!({"kind":"process","event":"started","extra":"secret-canary"}),
+            serde_json::json!({"kind":"plugin","event":{"action":"run","outcome":"secret-canary"}}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut record = serde_json::json!({"id":index+1,"source":"app","level":"info","message":"historical secret-canary",
+                "fields":{"__znetHostDiagnosticV1":{"schema":"host-action-outcome.v1","action":"run","outcome":"ok"}},"occurredAtUnixMs":1});
+            if index != 0 {
+                record["diagnosticEvent"] = classification;
+            }
+            use std::io::Write as _;
+            writeln!(
+                fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .unwrap(),
+                "{}",
+                record
+            )
+            .unwrap();
+        }
+        let reopened = load_recent_from_path(&path, 10).unwrap();
+        assert_eq!(reopened.len(), 5);
+        assert!(reopened
+            .iter()
+            .all(|entry| entry.diagnostic_event.is_none()));
+        assert!(reopened
+            .iter()
+            .all(|entry| entry.message == "historical secret-canary"));
+        let page = query_page_from_path(&path, &LogQuery::default()).unwrap();
+        assert_eq!(page.items.len(), 5);
+        assert!(page
+            .items
+            .iter()
+            .all(|entry| entry.diagnostic_event.is_none()));
+        rotate_path(&path, 3).unwrap();
+        assert_eq!(load_recent_from_path(&path, 10).unwrap().len(), 3);
     }
 }

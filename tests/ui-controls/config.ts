@@ -1,3 +1,6 @@
+import {dnsMigrationSettings} from './dns-migration';
+import {profileEditorListing} from './profile-editor';
+import {mobileLocationProfiles,mobileLocationNodes,mobileLocationClientSnapshot} from './mobile-location';
 // In-memory fixture only: the UI suite must never call Tauri, DNS or a kernel.
 import type { CommonRuleBindingInput, RuleSetSummary, RuleSetUpsert } from '../../src/lib/types/domain';
 import type { CoreKernelInfo } from '../../src/lib/types/core';
@@ -9,7 +12,8 @@ let items: RuleSetSummary[] = names.map((name, index) => ({
   commonBinding: { enabled: true, action: index === 3 ? 'proxy' : 'direct', order: (index + 1) * 10 },
   artifact: { path: '', majorVersion: 1, minorVersion: 0, checksum: 1, fileSize: 1024, entryCount: index === 1 ? 111868 : 18, builtAtUnixMs: 0 },
 }));
-export const listRuleSets = async () => structuredClone(items);
+export const listRuleSets = async () => new URLSearchParams(location.search).get('fixture')==='rule-migration'
+  ? (await import('./rule-migration')).ruleMigrationList() : structuredClone(items);
 export const getCommonRuleInjectionStatus = async () => ({ enabled: true, effective: true, eligibleCount: 4, injectedCount: 4 });
 export const setCommonRuleInjectionEnabled = getCommonRuleInjectionStatus;
 export const setCommonRuleBinding = async ({ ruleSetId, ...commonBinding }: CommonRuleBindingInput) => {
@@ -116,8 +120,9 @@ if (new URLSearchParams(location.search).get('mode') === 'managed-config') {
   profiles[0].format = 'json';
   profiles[0].managedSource = {pluginId:'connect',providerId:'provider',remoteSubscriptionId:'company',sourceName:'狗梯'};
 }
+export const listProxyConfigs = async () => { void proxyConfigSignal.revision; if(new URLSearchParams(location.search).get('fixture')==='mobile-location')return mobileLocationProfiles();return new URLSearchParams(location.search).get('fixture')==='rule-migration'
+  ? (await import('./rule-migration')).ruleMigrationProfiles() : structuredClone(profileEditorListing(profiles)); };
 export const getProxyConfig = async (id: string) => structuredClone(profiles.find(profile => profile.id === id)!);
-export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return structuredClone(profiles); };
 let catalogSources: SubscriptionProfile[] | null = null;
 if (new URLSearchParams(location.search).get('mode')?.startsWith('unified')) {
   const base = {name:'远端来源',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'work',policySelections:{Proxy:'selected'},updatedAtUnixMs:1};
@@ -127,12 +132,23 @@ if (new URLSearchParams(location.search).get('mode')?.startsWith('unified')) {
 }
 let managedLastSync = 1;
 let syncedSourceTarget: string | undefined;
+let recoveredOrdinarySource = false;
 window.addEventListener('fixture-subscription-synced', (event) => {
   managedLastSync = (event as CustomEvent<number>).detail;
 });
 export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => {
   if(catalogSources) return structuredClone(catalogSources);
   const mode = new URLSearchParams(location.search).get('mode');
+  if(mode==='quota-facts')return [
+    {id:'unknown',name:'额度已提供但用量未知',totalBytes:100},
+    {id:'partial',name:'只有上传已采样',uploadBytes:10,totalBytes:100},
+    {id:'zero',name:'明确的零用量',uploadBytes:0,downloadBytes:0,totalBytes:100},
+    {id:'unsafe',name:'数值无法确认',usedBytes:Number.MAX_SAFE_INTEGER+1,totalBytes:100},
+    {id:'paused',name:'自动暂停仍可手动',enabled:false,totalBytes:100,lastError:'source failed https://example.test?token=private-canary'},
+    {id:'cache',name:'条件记录损坏',lastError:'订阅条件请求记录无法读取、校验或保存；配置材料未因此删除，请检查本地存储后重试'},
+    {id:'uncertain',name:'原运行提交待核对',lastError:'订阅材料准备或运行提交结果未确认；请先核对已保存材料和运行状态，不要自动重放'},
+  ].map(item=>({url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'work',policySelections:{},updatedAtUnixMs:1,...item,
+    ...(item.id==='uncertain' && recoveredOrdinarySource ? {lastError:undefined,lastSyncAtUnixMs:2,updatedAtUnixMs:2}: {})}));
   if (mode === 'source-failure') {
     return profiles.map(profile => ({id:`sub-${profile.id}`,name:`订阅-${profile.name}`,url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:profile.id,policySelections:{},updatedAtUnixMs:1}));
   }
@@ -164,11 +180,32 @@ export const importProxyConfig = async () => structuredClone(profiles[0]);
 export const upsertProxyConfig = async () => structuredClone(profiles[0]);
 export const removeProxyConfig = async () => {};
 export const syncSubscription = async (id: string): Promise<SubscriptionProfile> => {
+  if(new URLSearchParams(location.search).get('mode')==='quota-facts'){
+    window.dispatchEvent(new CustomEvent('fixture-subscription-manual-sync',{detail:id}));
+    return {...(await listSubscriptions()).find(sub=>sub.id===id)!,lastSyncAtUnixMs:2};
+  }
   if(catalogSources) throw new Error('来源暂时不可达');
   if (new URLSearchParams(location.search).get('mode') !== 'unsynced-source' || id !== 'new-sub') throw new Error('No subscription network calls in this fixture');
   profiles.push({...structuredClone(profiles[0]),id:'synced',name:'新订阅配置',active:false});
   syncedSourceTarget = 'synced';
   return {id,name:'新订阅',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'synced',policySelections:{},updatedAtUnixMs:1};
+};
+export const resetSubscriptionConditionalCache=async(id:string,version:number)=>{window.dispatchEvent(new CustomEvent('fixture-subscription-cache-reset',{detail:{id,version}}));return {cleared:true};};
+export const reconcileUnknownSubscription=async(id:string,version:number,profileId:string|null):Promise<import('../../src/lib/services/config').SubscriptionReconciliation>=>{
+  window.dispatchEvent(new CustomEvent('fixture-subscription-inspection',{detail:{id,version,profileId}}));
+  const mode=new URLSearchParams(location.search).get('inspection');
+  if(mode==='late')await new Promise<void>(resolve=>window.addEventListener('fixture-release-inspection',()=>resolve(),{once:true}));
+  const confirmed=['confirmed','recovery-late','recovery-fail'].includes(mode??'');
+  const recorded=confirmed || mode==='prepared' || mode==='stale';
+  return {status:confirmed?'local-publication-pending':'result-unknown',source:{id,updatedAtUnixMs:String(version),lastSyncAtUnixMs:null},material:{status:'saved-valid',profileId,updatedAtUnixMs:'1',active:true,validation:'native-schema-only'},evidence:{candidate:recorded?'recorded':'not-recorded',receipt:confirmed || mode==='stale'?'confirmed':'not-recorded'},runtime:{status:'readable',coreInstanceId:'actual-fixture-instance',configRevision:'18446744073709551615',reasonCode:confirmed?'confirmed_receipt_matches':'runtime_identity_only',reason:confirmed?'真实应用回执与当前运行身份一致。':'当前运行身份可读，不代表原操作生效。'},canResolve:confirmed,recoveryId:recorded?'fixture-record':null,reason:confirmed?'原应用已确认，仅本地发布尚未完成。':'没有可核对一致的持久候选材料及应用回执；结果仍未确认。'};
+};
+export const recoverConfirmedSubscriptionLocal=async(id:string,expectedUpdatedAtUnixMs:string,recoveryId:string):Promise<SubscriptionProfile>=>{
+  window.dispatchEvent(new CustomEvent('fixture-subscription-local-recovery',{detail:{id,expectedUpdatedAtUnixMs,recoveryId}}));
+  const mode=new URLSearchParams(location.search).get('inspection');
+  if(mode==='recovery-late')await new Promise<void>(resolve=>window.addEventListener('fixture-release-recovery',()=>resolve(),{once:true}));
+  if(mode==='recovery-fail')throw new Error('Local publication conflict');
+  recoveredOrdinarySource=true;
+  return (await listSubscriptions()).find(source=>source.id===id)!;
 };
 export const upsertSubscription = async (input: import('../../src/lib/types/domain').SubscriptionUpsert): Promise<SubscriptionProfile> => {
   if(!catalogSources) throw new Error('No subscription writes in this fixture');
@@ -266,6 +303,7 @@ export const guiSelectPolicy = async (policy: string, tag: string) => {
   return {accepted: true};
 };
 export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/types/gui-api').NodeScreenSnapshot> => {
+  if (new URLSearchParams(location.search).get('fixture')==='mobile-location') return mobileLocationNodes();
   const scope = {profileId: 'fixture', configRevision: 1, coreInstanceId: 1};
   const params = new URLSearchParams(location.search);
   if (params.get('layout') === 'global') {
@@ -323,6 +361,7 @@ export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/typ
 
 let localFieldEdits: Record<string, unknown> = {};
 export const getProfileSettings = async () => {
+  if(new URLSearchParams(location.search).get('fixture')==='dns-migration') return dnsMigrationSettings(await getAppConfig());
   if (new URLSearchParams(location.search).has('config-unavailable')) throw new Error('当前配置不可用');
   const defaults = await getAppConfig();
   const settings = JSON.parse(JSON.stringify(defaults));
@@ -368,19 +407,30 @@ export async function getGuiDebugFrames(query: import('../../src/lib/types/debug
       removedSinceClientStart: 3, writeFailuresSinceClientStart: 0, completeness: 'unknown' as const}};
 }
 
-// The configuration editor uses the host-owned workspace API, not direct kernel writes.
-export const getConfigWorkspaceSnapshot = async (): Promise<import('../../src/lib/types/gui-api').ConfigWorkspaceSnapshot> => ({
-  profileId: 'main', profileName: '日常网络配置', sourceUpdatedAtUnixMs: 1,
-  sourceConfig: { log: { level: 'info' } },
-  localEdits: { 'localProxy.port': 7890 },
-  effectiveConfig: { log: { level: 'info' }, inbounds: [{ tag: 'local', listen: { port: 7890 } }] },
-  composition: { layers: [{ source: 'client', changedPaths: ['/inbounds'] }] },
-  runtime: { running: false, effectiveDigest: 'fixture', confirmed: false, reason: 'No kernel in UI fixture' },
-});
-export const planConfigWorkspace = async () => { throw new Error('Workspace planning is not provided by this fixture'); };
-export const applyConfigWorkspace = async () => { throw new Error('The UI fixture cannot apply a workspace'); };
+// The dedicated workspace panel owns the offline/u64 scenarios. Other settings
+// panels retain the source/override/effective baseline used by shared regressions.
+import { getConfigWorkspaceSnapshot as getDedicatedWorkspaceSnapshot } from './workspace-core';
+export async function getConfigWorkspaceSnapshot(): Promise<import('../../src/lib/types/gui-api').ConfigWorkspaceSnapshot> {
+  if (new URLSearchParams(location.search).get('panel') === 'workspace') return getDedicatedWorkspaceSnapshot();
+  return {
+    profileId: 'main', profileName: '日常网络配置', binding: 'settings-workspace-source',
+    sourceUpdatedAtUnixMs: '1', sourceJson: JSON.stringify({ log: { level: 'info' } }, null, 2),
+    localEditsJson: JSON.stringify({ 'localProxy.port': 7890 }, null, 2),
+    effectiveJson: JSON.stringify({ log: { level: 'info' }, inbounds: [{ tag: 'local', listen: { port: 7890 } }] }, null, 2),
+    pendingApply: true,
+    composition: { layers: [{ source: 'client', changedPaths: ['/inbounds'] }] },
+    runtime: { running: false, effectiveDigest: 'fixture', confirmed: false, reason: 'No kernel in UI fixture' },
+  };
+}
+export { planConfigWorkspace, applyConfigWorkspace, saveConfigWorkspaceLocal, formatConfigWorkspace, validateConfigWorkspace, inspectConfigWorkspaceOperation, discardConfigWorkspacePlan, reviewConfigWorkspaceRecovery, completeConfigWorkspaceLocal } from './workspace-core';
+export const guiDiscardDiagnostics = async (_planId: string): Promise<void> => {};
 
+let fixtureClientGeneration: number | undefined = 1;
+window.addEventListener('fixture-client-snapshot-generation', event => { fixtureClientGeneration = (event as CustomEvent<number | undefined>).detail; });
 export const getClientCoreSnapshot = async () => {
+  if (new URLSearchParams(location.search).get('fixture')==='mobile-location') return mobileLocationClientSnapshot();
   if (new URLSearchParams(location.search).has('host-failure')) throw {message:'host snapshot unavailable'};
-  return {revision:1,scope:{profileId:'fixture',configRevision:1,coreInstanceId:1},sourceStatus:'ready',activeProbeJobs:[]};
+  return {revision:1,scopeGeneration:fixtureClientGeneration,scope:{profileId:new URLSearchParams(location.search).get('fixture') === 'overview' ? 'main' : 'fixture',configRevision:1,coreInstanceId:1},sourceStatus:'ready',activeProbeJobs:[]};
 };
+// Explicit metadata reads only; never invoke the operation/Packet fixture gateway.
+export { inspectWorkspaceStorage, inspectPacketLedger } from './storage-inspection';

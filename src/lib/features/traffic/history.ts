@@ -9,7 +9,10 @@ export function metric(plane:PlaneSnapshot|undefined,key:string):bigint|null {
 export function observe(previous:Observation|undefined,snapshot:TrafficSnapshot,retainHistory:boolean,now=Date.now()):Observation {
   const same=previous?.snapshot.core_instance_id===snapshot.core_instance_id&&previous.snapshot.stats_epoch===snapshot.stats_epoch&&previous.snapshot.generation===snapshot.generation;
   const before=same&&previous?.baselineValid?previous.snapshot:undefined;
-  const elapsed=before?BigInt(snapshot.sampled_at_monotonic_ns)-BigInt(before.sampled_at_monotonic_ns):0n;
+  // A query timestamp is not evidence of a new OS provider read.
+  const clock=snapshot.scope.kind==='host_interface'?snapshot.source_sampled_at_monotonic_ns:snapshot.sampled_at_monotonic_ns;
+  const priorClock=before?.scope.kind==='host_interface'?before.source_sampled_at_monotonic_ns:before?.sampled_at_monotonic_ns;
+  const elapsed=clock!=null&&priorClock!=null?BigInt(clock)-BigInt(priorClock):0n;
   const rates:Record<string,number|null>={};
   for(const plane of snapshot.planes)for(const key of new Set([...plane.available_metrics,'bytes_up','bytes_down','rx_bytes','tx_bytes'])) {
     if(!key.endsWith('bytes')&&!key.startsWith('bytes_'))continue;

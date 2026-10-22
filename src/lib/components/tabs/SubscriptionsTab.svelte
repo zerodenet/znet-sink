@@ -1,5 +1,6 @@
 <script lang="ts">
-  // Compatibility entry for persisted routes and external shortcuts.
   import ProfilesTab from './ProfilesTab.svelte';
+  import SubscriptionSources from '$lib/components/configuration/SubscriptionSources.svelte';
+  let { mobile = false }: { mobile?: boolean } = $props();
 </script>
-<ProfilesTab />
+{#if mobile}<SubscriptionSources mobile />{:else}<ProfilesTab />{/if}

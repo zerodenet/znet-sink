@@ -9,6 +9,9 @@ description = "Transport-independent Zero observation client and subscription ow
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+znet-client-core = { path = "../client-core" }
+zero-api = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
+tokio = { version = "1", features = ["time", "sync"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

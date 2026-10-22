@@ -1,32 +1,43 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import EndpointTrafficOverviewFixture from './EndpointTrafficOverviewFixture.svelte';
+  import { observeMobilePresentation } from '$lib/features/mobile/platform.svelte';
+  import MobileShell from '$lib/components/mobile/MobileShell.svelte';
   import AppHeader from '$lib/components/AppHeader.svelte';
   import TabContent from '$lib/components/TabContent.svelte';
   import { store } from '$lib/services/store.svelte';
   import { NAV_TABS } from '$lib/constants/navigation';
-  import { provideTrafficWorkspace } from '$lib/features/traffic/context';
+  import { provideTrafficWorkspace, useTrafficWorkspace } from '$lib/features/traffic/context';
 
   provideTrafficWorkspace();
+  const workspace = useTrafficWorkspace();
+  let trafficPreferences = $state('');
 
   const params = new URLSearchParams(window.location.search);
   const preview = params.has('preview');
   store.uiMode = params.get('mode') === 'lite' ? 'lite' : 'pro';
-  store.activeTab = store.uiMode === 'pro' && params.get('tab') === 'endpoints' ? 'endpoints' : 'nodes';
+  store.activeTab = params.has('mobile-endpoint-return') ? 'overview' : store.uiMode === 'pro' && params.get('tab') === 'endpoints' ? 'endpoints' : 'nodes';
   store.interactionSurface.navigation = new Map(NAV_TABS.map(tab => [tab.id, {
     key: tab.id, visible: store.uiMode === 'pro' || ['overview','nodes','subscriptions','logs','plugins','settings'].includes(tab.id), operable: true, readonly: false, category: 'navigation',
   }]));
   let catalogReads = $state(0);
   onMount(() => {
+    const stopPresentation = params.has('mobile-endpoint-return') ? observeMobilePresentation() : () => {};
+    const readPreferences = () => { trafficPreferences = JSON.stringify(workspace.statistics); };
+    window.addEventListener('fixture-read-traffic-preferences', readPreferences);
     const count = () => { catalogReads++; };
     window.addEventListener('fixture-endpoint-catalog-read', count);
-    return () => window.removeEventListener('fixture-endpoint-catalog-read', count);
+    return () => { stopPresentation(); window.removeEventListener('fixture-read-traffic-preferences', readPreferences); window.removeEventListener('fixture-endpoint-catalog-read', count); };
   });
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-background">
   {#if preview}<div class="preview-banner" role="status">交互预览 · 模拟数据 · 不连接真实内核，刷新页面恢复初始状态</div>{/if}
+  {#if params.has('mobile-endpoint-return')}<MobileShell>{#snippet overview()}<EndpointTrafficOverviewFixture />{/snippet}{#snippet nodes()}<p>节点</p>{/snippet}{#snippet configuration()}<p>配置</p>{/snippet}</MobileShell>{:else}
   <AppHeader />
   <div class="fixture-content"><TabContent tab={store.activeTab} /></div>
+  {/if}
+  <output class="sr-only" aria-label="当前统计浏览偏好">{trafficPreferences}</output>
   <output class="sr-only" aria-label="端点目录查询次数">{catalogReads}</output>
 </div>
 

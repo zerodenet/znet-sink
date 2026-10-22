@@ -49,7 +49,7 @@ export interface DnsBackendAttempt {
 export interface DnsCacheEntry {
   domain: string;
   addresses: string[];
-  ttl_seconds?: number;
+  ttl_seconds?: string | null;
   [key: string]: unknown;
 }
 
@@ -58,7 +58,7 @@ export interface DnsCacheResult {
   domain?: string;
   hit?: boolean;
   addresses?: string[];
-  ttl_seconds?: number;
+  ttl_seconds?: string | null;
   entries?: DnsCacheEntry[];
   count?: number;
   [key: string]: unknown;
@@ -86,30 +86,14 @@ export interface FakeIpLookupResult {
   [key: string]: unknown;
 }
 
-/** A single hop in a route trace. `rtt` may be a single value or an array
- *  of probe attempts depending on the kernel response. */
-export interface TraceHop {
-  ttl?: number;
-  hop?: number;
-  addr?: string;
-  address?: string;
-  ip?: string;
-  host?: string;
-  rtt?: number | number[];
-  latency?: number | number[];
-  timeout?: boolean;
-  error?: string;
-  [key: string]: unknown;
-}
-
-/** Result of a `diagnostics.trace_route` command. */
+/** Actual public route evaluation, not a traceroute or reachability probe.
+ * Rule indices are decimal strings to preserve the native usize/u64 wire. */
 export interface TraceRouteResult {
-  target?: string;
-  port?: number;
-  protocol?: string;
-  hops?: TraceHop[];
-  totalHops?: number;
-  elapsedMs?: number;
-  error?: string;
-  [key: string]: unknown;
+  target: string;
+  port: number;
+  protocol: 'tcp' | 'udp';
+  inbound_tag: string | null;
+  effective_mode: 'rule' | 'global' | 'direct';
+  route_action: 'direct' | 'reject' | { route: string };
+  matched_rule: { index: string; condition: string } | null;
 }

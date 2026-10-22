@@ -1,0 +1,26 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for network-constrained JobScheduler when targeting API34+. Normal permission; no runtime prompt. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <application>
+        <service android:name="org.zerodenet.znetsink.nativeio.NativePluginJobService"
+            android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />
+        <service android:name="org.zerodenet.znetsink.nativeio.NativeAppUpdateDownloadJob"
+            android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />
+        <receiver android:name="org.zerodenet.znetsink.nativeio.NativeAppUpdateReceiver" android:exported="false" />
+        <receiver android:name="org.zerodenet.znetsink.nativeio.NativeAppUpdateReplacedReceiver" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
+        <provider
+            android:name="org.zerodenet.znetsink.nativeio.NativeIoFileProvider"
+            android:authorities="${applicationId}.nativeio.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/native_io_paths" />
+        </provider>
+        <receiver android:name="org.zerodenet.znetsink.nativeio.ShareSelectionReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

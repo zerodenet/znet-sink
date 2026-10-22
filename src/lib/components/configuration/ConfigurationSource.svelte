@@ -1,13 +1,16 @@
 <script lang="ts">
   import type { SubscriptionProfile } from '$lib/types/domain';
-  import { pluginLabel, subscriptionUsedBytes } from '$lib/features/configuration/catalog';
+  import { pluginLabel } from '$lib/features/configuration/catalog';
+  import { subscriptionUsage, subscriptionFailureSummary } from '$lib/features/mobile/subscription-usage';
   import { Button } from '$lib/components/ui/button';
-  let { source, busy, canRemove, onupdate, onedit, onremove, onplugin }: {
+  let { source, busy, canRemove, onupdate, onedit, onremove, onplugin, onmanage }: {
     source: SubscriptionProfile; busy: boolean; canRemove: boolean;
-    onupdate: () => void; onedit: () => void; onremove: () => void; onplugin: () => void;
+    onupdate: () => void; onedit: () => void; onremove: () => void; onplugin: () => void; onmanage: () => void;
   } = $props();
-  const used = $derived(subscriptionUsedBytes(source));
-  const ratio = $derived(source.totalBytes && used != null ? Math.min(100, used / source.totalBytes * 100) : null);
+  const usage = $derived(subscriptionUsage(source));
+  const used = $derived(usage.used);
+  const ratio = $derived(usage.percent);
+  const failure = $derived(subscriptionFailureSummary(source.lastError));
   function bytes(value: number | null | undefined): string {
     if (value == null) return '未知';
     const units = ['B', 'KB', 'MB', 'GB', 'TB']; let unit = 0;
@@ -23,16 +26,17 @@
   <div class="metadata" aria-label="来源同步时间">同步: {source.lastSyncAtUnixMs ? date(source.lastSyncAtUnixMs) : '尚未成功更新'}</div>
   {#if source.expireAtUnixMs != null}<div class="metadata">到期: {date(source.expireAtUnixMs)}（{source.expireAtUnixMs < Date.now() ? '已到期' : `剩 ${Math.ceil((source.expireAtUnixMs - Date.now()) / 86_400_000)} 天`}）</div>{/if}
   {#if used != null || source.totalBytes != null}
-    <div class="usage">已用 {bytes(used)} / 总量 {bytes(source.totalBytes)}{#if ratio != null}<span>{ratio.toFixed(1)}%</span>{/if}</div>
+    <div class="usage">已用 {bytes(used)} / 总量 {bytes(usage.total)}{#if ratio != null}<span>{ratio.toFixed(1)}%</span>{/if}</div>
     {#if ratio != null}<progress value={ratio} max="100" aria-label="订阅流量使用比例"></progress>{/if}
   {/if}
-  {#if source.lastError}<p role="alert" class="source-error">上次更新失败：{source.lastError}；已保存的配置保持可用。</p>{/if}
+  {#if failure}<p role="alert" class="source-error">{failure.message}</p>{/if}
   <div class="source-actions">
     {#if source.managedSource}<Button size="sm" variant="outline" onclick={onplugin}>前往来源插件</Button>
     {:else}
-      <Button size="sm" variant="outline" disabled={busy || !source.enabled} onclick={onupdate}>更新来源</Button>
+      <Button size="sm" variant="outline" disabled={busy || failure?.unknown} onclick={onupdate}>更新来源</Button>
       <Button size="sm" variant="ghost" disabled={busy} onclick={onedit}>编辑来源</Button>
       <Button size="sm" variant="ghost" disabled={busy || !canRemove} onclick={onremove}>移除来源</Button>
+      <Button size="sm" variant="outline" disabled={busy} onclick={onmanage}>来源状态与结果核对</Button>
     {/if}
   </div>
 </section>

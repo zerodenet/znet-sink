@@ -15,9 +15,12 @@ use crate::models::subscription::SubscriptionProfile;
 use super::domain_store;
 
 const DATABASE_FILE: &str = "znet-sink.db";
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 5;
 
+pub(crate) mod inspection;
+pub(crate) mod ordinary_recovery;
 pub(crate) mod storage;
+pub(crate) mod workspace_recovery;
 const APPLICATION_ID: i32 = 0x5A4E_4554; // "ZNET"
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RECORD_JSON_BYTES: usize = 16 * 1024 * 1024;
@@ -96,10 +99,24 @@ pub(crate) fn save_proxy_configs(dir: &Path, items: &[ProxyConfigProfile]) -> Ap
 }
 
 pub(crate) fn save_subscriptions(dir: &Path, items: &[SubscriptionProfile]) -> AppResult<()> {
+    save_subscriptions_authorized(dir, items, &|| Ok(()))
+}
+
+/// Recheck the original authority after acquiring SQLite's writer slot and at
+/// the durable commit boundary. A caller stopped during busy-lock wait cannot
+/// publish a previously admitted candidate after that wait ends.
+pub(crate) fn save_subscriptions_authorized(
+    dir: &Path,
+    items: &[SubscriptionProfile],
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    authorize()?;
     let mut connection = open(dir)?;
     import_legacy_json_once(&mut connection, dir)?;
     let transaction = immediate_transaction(&mut connection)?;
+    authorize()?;
     replace_subscriptions(&transaction, items)?;
+    authorize()?;
     commit_and_restrict(transaction, dir)
 }
 
@@ -108,11 +125,23 @@ pub(crate) fn save_domain_data(
     proxy_configs: &[ProxyConfigProfile],
     subscriptions: &[SubscriptionProfile],
 ) -> AppResult<()> {
+    save_domain_data_authorized(dir, proxy_configs, subscriptions, &|| Ok(()))
+}
+
+pub(crate) fn save_domain_data_authorized(
+    dir: &Path,
+    proxy_configs: &[ProxyConfigProfile],
+    subscriptions: &[SubscriptionProfile],
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    authorize()?;
     let mut connection = open(dir)?;
     import_legacy_json_once(&mut connection, dir)?;
     let transaction = immediate_transaction(&mut connection)?;
+    authorize()?;
     replace_proxy_configs(&transaction, proxy_configs)?;
     replace_subscriptions(&transaction, subscriptions)?;
+    authorize()?;
     commit_and_restrict(transaction, dir)
 }
 
@@ -206,6 +235,12 @@ fn migrate_schema(connection: &mut Connection, dir: &Path) -> AppResult<()> {
     }
     transaction
         .execute_batch(storage::SCHEMA)
+        .map_err(|error| database_error(dir, error))?;
+    transaction
+        .execute_batch(workspace_recovery::SCHEMA)
+        .map_err(|error| database_error(dir, error))?;
+    transaction
+        .execute_batch(ordinary_recovery::SCHEMA)
         .map_err(|error| database_error(dir, error))?;
     transaction
         .pragma_update(None, "user_version", SCHEMA_VERSION)
@@ -361,6 +396,7 @@ fn replace_proxy_configs(
             [],
         )
         .map_err(database_error_without_path)?;
+    workspace_recovery::advance_epoch(transaction)?;
     Ok(())
 }
 
@@ -417,6 +453,7 @@ fn replace_subscriptions(
             [],
         )
         .map_err(database_error_without_path)?;
+    workspace_recovery::advance_epoch(transaction)?;
     Ok(())
 }
 
@@ -864,3 +901,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod graph_epoch_tests;
