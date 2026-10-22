@@ -1,5 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application>
+        <service android:name="org.zerodenet.znetsink.nativeio.NativePluginJobService"
+            android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />
+        <service android:name="org.zerodenet.znetsink.nativeio.NativeAppUpdateDownloadJob"
+            android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />
+        <receiver android:name="org.zerodenet.znetsink.nativeio.NativeAppUpdateReceiver" android:exported="false" />
+        <receiver android:name="org.zerodenet.znetsink.nativeio.NativeAppUpdateReplacedReceiver" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
         <provider
             android:name="org.zerodenet.znetsink.nativeio.NativeIoFileProvider"
             android:authorities="${applicationId}.nativeio.files"

@@ -54,6 +54,7 @@ async function openVersions(page: Page, scenario = '', kernel = false) {
       if (command === 'plugin:event|listen') { eventHandler = args!.handler as number; return 1; }
       if (command === 'plugin:event|unlisten') return null;
       if (command === 'plugin:app|version') return '1.0.0';
+      if (command === 'mobile_app_update_status') return { state:'idle',operationId:null,reason:null,packageName:'org.zerodenet.znetsink.debug',installedVersion:'1.0.0',installedVersionCode:'1',targetVersion:null,targetVersionCode:null,downloadedBytes:'0',sizeBytes:null,assetName:null,sha256:null,installPermission:'allowed',confirmationAvailable:false,installerStatus:null };
       if (command === 'mobile_release_schedule') {
         const captured = structuredClone(schedule);
         if (holdSchedule) { holdSchedule = false; return new Promise(resolve => { target.__releaseSchedule = () => resolve(captured); }); }

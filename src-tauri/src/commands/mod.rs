@@ -50,3 +50,7 @@ pub mod packet_routes;
 pub mod profile_removal;
 pub mod runtime_bridge;
 pub mod settings_transfer;
+
+pub mod android_app_update;
+
+pub mod android_plugin_jobs;

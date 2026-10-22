@@ -6,6 +6,7 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import * as Dialog from '$lib/components/ui/dialog';
   import MobileSettingsDraftGuard from './MobileSettingsDraftGuard.svelte';
+  import MobileAppUpdate from './MobileAppUpdate.svelte';
   import { getMobilePlatformSnapshot, type MobilePlatformSnapshot } from '$lib/features/mobile/runtime';
   import { getVersion } from '@tauri-apps/api/app';
   import { getGuiCoreHealth } from '$lib/services/core';
@@ -130,7 +131,7 @@
       <div><dt>默认分发策略</dt><dd>计划随应用分发</dd></div>
       <div><dt>随包内核产物</dt><dd>{platform?.bundledKernelAvailable === true ? '平台确认可用' : platform?.bundledKernelAvailable === false ? '随包内核产物未接入' : '状态未确认'}</dd></div>
     {/if}
-    <div><dt>安装能力</dt><dd>适配待完成</dd></div>
+    <div><dt>安装能力</dt><dd>{!kernel && platform?.platform === 'android' ? 'Android 系统确认安装；待设备验收' : '适配待完成'}</dd></div>
   </dl>
   {#if versionError}<p role="alert">{versionError}</p>{/if}
   <Button variant="outline" onclick={readVersions} disabled={versionReading}>{versionReading ? '正在核对…' : '重新核对版本'}</Button>
@@ -187,7 +188,7 @@
   {#if catalogState.catalog}
     <p>{catalogState.phase === 'error' || catalogState.phase === 'checking' || !catalogState.catalogCurrent ? '上次成功目录（历史）' : '最近检查'}：{time(catalogState.catalog.checkedAtUnixMs)}。本次读取最多 {catalogState.catalog.catalogLimit} 条项目发行记录。</p>
     {#if catalogState.phase === 'ready' && catalogState.catalogCurrent}
-      <p role="status">{comparison === 'no-release' ? '当前渠道在本次目录中暂无发行记录。' : comparison === 'current-unknown' ? '当前版本未确认，无法判定是否有更新。' : comparison === 'available' ? '当前渠道发现较新的项目版本；手机安装能力仍未适配。' : '本次当前渠道目录中未发现更新版本。'}</p>
+      <p role="status">{comparison === 'no-release' ? '当前渠道在本次目录中暂无发行记录。' : comparison === 'current-unknown' ? '当前版本未确认，无法判定是否有更新。' : comparison === 'available' ? '当前渠道发现较新的项目版本；安装须核对实际平台与 APK。' : '本次当前渠道目录中未发现更新版本。'}</p>
     {/if}
     <p>{catalogState.catalog.reusedValidatedCache ? '服务器返回 304，已核对并复用原有效目录。' : '服务器返回 200，已读取本次目录。'}</p>
     <p>{catalogState.catalog.targetReason}</p>
@@ -201,7 +202,8 @@
       <Button variant="outline" onclick={() => selected && openReleases(selected.releaseUrl)}>打开此版本项目页面</Button>
     {/if}
   {/if}
-  <p>{kernel ? '默认移动内核通过客户端升级更新。运行服务、实例重建与重启核对尚未适配，当前不执行独立内核下载、安装或重启。' : '商店、测试发行及系统安装器尚未接入。本页读取项目发行资料，不会调用桌面 updater 或执行下载、安装。'}</p>
+  {#if !kernel && platform?.platform === 'android'}<MobileAppUpdate release={selected} {channel} catalogCurrent={catalogState.catalogCurrent} />{/if}
+  <p>{kernel ? '默认移动内核通过客户端升级更新。运行服务、实例重建与重启核对尚未适配，当前不执行独立内核下载、安装或重启。' : platform?.platform === 'android' ? 'Android 更新使用系统安装会话与用户确认。没有可信 APK 或签名不匹配时保留当前版本；设备安装验收另行记录。' : '当前平台的商店、测试发行及安装器尚未接入；目录只读，不调用桌面 updater。'}</p>
   <Button variant="outline" onclick={() => openReleases()}>查看项目发行页面</Button>
   {#if kernel}<Button variant="outline" onclick={() => navigation.open('updates')}>通过客户端升级更新内核</Button>{/if}
   {#if linkError}<p role="alert">系统浏览器打开失败，可复制发行页面地址：</p><Input readonly aria-label="发行页面地址" value={linkError} />{/if}

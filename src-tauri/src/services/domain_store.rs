@@ -116,6 +116,13 @@ pub(crate) fn save_subscriptions(items: &[SubscriptionProfile]) -> AppResult<()>
     save_subscriptions_to_dir(&data_dir()?, items)
 }
 
+pub(crate) fn save_subscriptions_authorized(
+    items: &[SubscriptionProfile],
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    app_database::save_subscriptions_authorized(&data_dir()?, items, authorize)
+}
+
 pub(crate) fn save_rule_sets(items: &[RuleSetProfile]) -> AppResult<()> {
     save_rule_sets_to_dir(&data_dir()?, items)
 }
@@ -136,6 +143,21 @@ pub fn save_rule_sets_to_dir(dir: &Path, items: &[RuleSetProfile]) -> AppResult<
     history.mutate(&content, None, None, || {
         super::atomic_file::write(&path, &content)
             .map_err(|_| AppError::internal("rule sets file could not be published"))
+    })?;
+    Ok(())
+}
+
+pub(crate) fn save_rule_sets_authorized(
+    items: &[RuleSetProfile],
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    let path = data_dir()?.join(RULE_SETS_FILE);
+    let content = serde_json::to_vec_pretty(items)
+        .map_err(|_| AppError::internal("rule sets encoding failed"))?;
+    let mut history = file_history::acquire(&path, Domain::RuleSets)?;
+    authorize()?;
+    history.mutate(&content, None, None, || {
+        super::atomic_file::write_authorized(&path, &content, authorize)
     })?;
     Ok(())
 }

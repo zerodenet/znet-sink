@@ -5,6 +5,56 @@ use serde_json::json;
 fn raw(tag: &str) -> Value {
     json!({"tag_name":tag,"draft":false,"prerelease":false,"body":"real notes","assets":[]})
 }
+
+#[test]
+fn android_candidates_require_canonical_origin_uploaded_size_and_api_digest() {
+    let asset = json!({"id": 57, "name": "client-x86.apk", "size": 100,
+        "state":"uploaded", "digest":format!("sha256:{}", "a".repeat(64)),
+        "browser_download_url":"https://github.com/zerodenet/znet-sink/releases/download/v1.0.0/client-x86.apk"});
+    let mut release = raw("v1.0.0");
+    release["assets"] = json!([asset.clone()]);
+    let result = parsed(
+        vec![release.clone()],
+        MobileReleaseSource::Client,
+        MobileReleaseChannel::Stable,
+    );
+    assert_eq!(result[0].android_assets.len(), 1);
+    assert_eq!(result[0].android_assets[0].asset_id, "57");
+    for (field, invalid) in [
+        ("digest", json!(null)),
+        ("digest", json!(format!("sha256:{}", "A".repeat(64)))),
+        ("size", json!(536870913u64)),
+        ("state", json!("open")),
+        ("id", json!(0)),
+        ("name", json!("../client.apk")),
+        (
+            "browser_download_url",
+            json!("https://evil.test/client-x86.apk"),
+        ),
+    ] {
+        let mut bad = asset.clone();
+        bad[field] = invalid;
+        release["assets"] = json!([bad]);
+        assert!(
+            parsed(
+                vec![release.clone()],
+                MobileReleaseSource::Client,
+                MobileReleaseChannel::Stable
+            )[0]
+            .android_assets
+            .is_empty(),
+            "{field}"
+        );
+    }
+    release["assets"] = json!([asset]);
+    assert!(parsed(
+        vec![release],
+        MobileReleaseSource::Kernel,
+        MobileReleaseChannel::Stable
+    )[0]
+    .android_assets
+    .is_empty());
+}
 fn parsed(
     values: Vec<Value>,
     source: MobileReleaseSource,

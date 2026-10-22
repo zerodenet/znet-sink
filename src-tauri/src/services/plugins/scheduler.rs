@@ -12,7 +12,7 @@ use std::{
 use tauri::Manager as _;
 use znet_plugin_sandbox::contract::{Capability, Request};
 
-mod attempt;
+pub(super) mod attempt;
 pub(super) use attempt::Owner;
 use attempt::{Attempt, Completion, Phase};
 
@@ -269,6 +269,14 @@ impl Host {
         Ok(())
     }
     pub(super) fn take_due(&self, manager: &Manager, now: u64) -> AppResult<Vec<DueTask>> {
+        self.take_due_limited(manager, now, usize::MAX)
+    }
+    pub(super) fn take_due_limited(
+        &self,
+        manager: &Manager,
+        now: u64,
+        maximum: usize,
+    ) -> AppResult<Vec<DueTask>> {
         let _operation = self.operation_guard()?;
         let schedule_permission = Request {
             capability: Capability::TasksSchedule,
@@ -334,7 +342,8 @@ impl Host {
             if let Some(attempt) = task.last_attempt.as_mut() {
                 changed |= attempt.recover(&self.scheduler, review.as_ref(), now)?;
             }
-            if task.next_run_unix_ms <= now
+            if due.len() < maximum
+                && task.next_run_unix_ms <= now
                 && enabled.contains(&(task.plugin_id.clone(), task.component_id.clone()))
                 && !task
                     .last_attempt
@@ -472,7 +481,7 @@ impl Host {
             &|| Ok(()),
         )
     }
-    fn record_scheduled_completion(
+    pub(super) fn record_scheduled_completion(
         &self,
         manager: &Manager,
         due: &DueTask,

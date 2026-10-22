@@ -187,13 +187,15 @@ pub(super) fn build_catalog(
         catalog_limit: MAX_RELEASES,
         target_status: if source == MobileReleaseSource::Kernel {
             "bundled-via-client"
+        } else if cfg!(target_os = "android") {
+            "android-system-installer"
         } else {
             "installation-not-adapted"
         },
         target_reason: if source == MobileReleaseSource::Kernel {
             "默认内核随应用更新；独立移动内核安装不开放。目录版本不代表已接入随包产物。"
         } else {
-            "当前目标的移动安装器及发行清单尚未适配；发行版本或资产扩展名不能确认手机安装兼容性。"
+            "Android 仅允许具有 GitHub SHA-256 摘要的 APK 候选；下载后还须核对包身份、版本、设备与已安装签名，并经系统确认。无可信 APK 时不能安装。其他平台安装适配仍未完成。"
         },
         request_id,
         response_status,
@@ -307,8 +309,62 @@ fn parse_release(raw: &Value, source: MobileReleaseSource) -> Option<(Version, M
                 "https://github.com/zerodenet/{}/releases/tag/{tag}",
                 repository(source)
             ),
+            android_assets: if source == MobileReleaseSource::Client {
+                android_assets(raw, tag)
+            } else {
+                Vec::new()
+            },
         },
     ))
+}
+
+fn android_assets(raw: &Value, tag: &str) -> Vec<AndroidReleaseAsset> {
+    raw.get("assets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(100)
+        .filter_map(|asset| {
+            let id = asset.get("id")?.as_u64()?;
+            let name = asset.get("name")?.as_str()?;
+            if id == 0
+                || name.len() > 180
+                || !name.ends_with(".apk")
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+            {
+                return None;
+            }
+            let size = asset.get("size")?.as_u64()?;
+            if size == 0 || size > 512 * 1024 * 1024 || asset.get("state")?.as_str()? != "uploaded"
+            {
+                return None;
+            }
+            let digest = asset.get("digest")?.as_str()?.strip_prefix("sha256:")?;
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return None;
+            }
+            let url = asset.get("browser_download_url")?.as_str()?;
+            if url
+                != format!("https://github.com/zerodenet/znet-sink/releases/download/{tag}/{name}")
+            {
+                return None;
+            }
+            Some(AndroidReleaseAsset {
+                asset_id: id.to_string(),
+                name: name.into(),
+                url: url.into(),
+                sha256: digest.into(),
+                size_bytes: size.to_string(),
+            })
+        })
+        .take(16)
+        .collect()
 }
 
 #[cfg(test)]

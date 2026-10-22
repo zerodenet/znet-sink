@@ -374,16 +374,13 @@ impl ProfilePublication {
     }
 }
 
-async fn upsert_runtime_transition(
-    app_handle: AppHandle,
+/// Shared ownership projection for UI/runtime and OS job local publication.
+pub(super) fn prepare_owned_upsert(
+    previous: &[ProxyConfigProfile],
     input: ProxyConfigUpsert,
     managed_owner: Option<ManagedSubscriptionSource>,
-    publication: ProfilePublication,
-) -> AppResult<ProxyConfigProfile> {
-    let state = app_handle.state::<AppState>();
-    let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
-    let previous_active = previous.iter().find(|profile| profile.active).cloned();
-    let (mut next, mut profile) = build_upsert_profiles(&previous, input)?;
+) -> AppResult<(Vec<ProxyConfigProfile>, ProxyConfigProfile)> {
+    let (mut next, mut profile) = build_upsert_profiles(previous, input)?;
     let previous_target = previous.iter().find(|item| item.id == profile.id);
     match (
         &managed_owner,
@@ -420,6 +417,19 @@ async fn upsert_runtime_transition(
             .ok_or_else(|| AppError::internal("failed to prepare managed proxy config"))?;
         target.managed_source = Some(owner);
     }
+    Ok((next, profile))
+}
+
+async fn upsert_runtime_transition(
+    app_handle: AppHandle,
+    input: ProxyConfigUpsert,
+    managed_owner: Option<ManagedSubscriptionSource>,
+    publication: ProfilePublication,
+) -> AppResult<ProxyConfigProfile> {
+    let state = app_handle.state::<AppState>();
+    let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
+    let previous_active = previous.iter().find(|profile| profile.active).cloned();
+    let (next, profile) = prepare_owned_upsert(&previous, input, managed_owner)?;
     let next_active = next.iter().find(|item| item.active).cloned();
     let runtime_changed = previous_active
         .as_ref()

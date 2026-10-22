@@ -1,5 +1,7 @@
 # v0.0.3 移动适配验收账本
 
+2026-10-22 增量：[Android OS 插件后台执行](android-plugin-background-v0.0.3.md)与[App 更新安装](android-app-updates-v0.0.3.md)在同一 PR 中实现并列为新合并门槛。以下旧日期“仅前台/安装未适配”不代表本批代码；真实 Android/模拟器/Galaxy S8 结果以最新验证记录为准。普通订阅 OS 同步、VPN/core、iOS 和其他平台缺口仍单列。
+
 交付为 develop 基线 `fd198ba52711f018334860b8a6704546ccd349fd` 上的单个 draft PR #46。版本保持 `0.0.3-dev.202610131010`，没有发布、合并或签名。PRD V3 是验收目标；下列客户端实现和构建证据不等于全部 A/E 项完成。
 
 2026-10-19 iOS UI 主宿主补充见 [完整 App 与调试入口](ios-ui-host-v0.0.3.md)：标准生成与真实 SDK/Simulator 结果以对应新 commit 的 CI 回执独立记录，不与此前 NativeIo 单库报告混用。签名、真机、Packet Tunnel 和内核缺口保持。

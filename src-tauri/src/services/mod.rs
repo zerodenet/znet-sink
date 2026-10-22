@@ -141,12 +141,17 @@ pub(crate) fn install_mobile_data_dir(path: PathBuf) -> AppResult<()> {
             "native app container must be an absolute path",
         ));
     }
-    match MOBILE_DATA_DIR.get() {
-        Some(existing) if existing == &path => Ok(()),
-        Some(_) => Err(AppError::internal("native app container identity changed")),
-        None => MOBILE_DATA_DIR
-            .set(path)
-            .map_err(|_| AppError::internal("native app container was already initialized")),
+    #[cfg(target_os = "android")]
+    let path = path
+        .canonicalize()
+        .map_err(|_| AppError::internal("native app container is unavailable"))?;
+    // UI and a cold JobService may initialize concurrently. The same private
+    // directory is idempotent; a different container is always rejected.
+    let existing = MOBILE_DATA_DIR.get_or_init(|| path.clone());
+    if existing == &path {
+        Ok(())
+    } else {
+        Err(AppError::internal("native app container identity changed"))
     }
 }
 
@@ -165,3 +170,5 @@ pub mod profile_removal;
 pub(crate) mod rule_migration_artifact;
 pub(crate) mod runtime_bridge;
 pub mod settings_transfer;
+
+pub mod android_app_update;

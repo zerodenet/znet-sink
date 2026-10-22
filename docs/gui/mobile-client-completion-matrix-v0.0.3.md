@@ -1,5 +1,7 @@
 # PRD V3 客户端完成度与剩余能力
 
+2026-10-22：用户新增合并门槛为 Android [系统后台插件任务](android-plugin-background-v0.0.3.md)和[App 安装闭环](android-app-updates-v0.0.3.md)。本批在同一 PR 实施真实 JobService/无 AppHandle 服务、下载/包审阅/PackageInstaller/安装版本核对；此前仅前台/安装未适配的描述为历史状态。代码、宿主测试、Android 构建、模拟器、API24/Galaxy S8 分别记录，缺设备运行/合格签名发行资产时仍未达到完整验收门槛。普通 URL 订阅的 OS 后台同步、浏览器返回、文件票据及其他未实现项不因本批自动完成。
+
 2026-10-20 合并收敛：[范围与风险审计](../verification/pr46-merge-readiness.md)。当前实际
 PR为open、非Draft；历史日期中的Draft称谓不描述当前状态。本轮收敛CI、说明及门禁发现的
 Windows订阅确认前写关闭重连缺口（有界、原截止时间、业务不重放），不带入
@@ -54,7 +56,7 @@ CI 的 Debug/unsigned Release 分别校验，不能互相借用结果，也不�
 | A20 | 签名分发、本地发布者信任、版本权限审阅保留；新增[移动系统包选择与一次性固定字节审阅](mobile-plugin-foreground-v0.0.3.md)，线上安装绑定摘要和原生代次 | 原生选择/安装实际设备结果、失败分阶段和渠道仍须验收 | iOS Release 外部插件分发未验收，Debug 开发包显式审阅；不是全部 core 阻塞 |
 | A21 | 新增原生 Target、前台解释器 owner、旧代次拒绝、配置草稿原 review、页面恢复与通知接受/呈现区分；SDK 沿用原权限/预算 | [原生安全秘密/设备密码学](mobile-plugin-secure-storage-v0.0.3.md)已接入，真实API24/Apple运行结果单独记录；前台任务owner及未知屏障已接入；文件票据、浏览器回调、OS后台调度、受保护运行加载仍逐项推进 | 当前批 Apple SDK/Simulator 结果见验证记录；同进程解释器不提供 native crash/OOM 隔离 |
 | A22 | [固定资源预览与逐项卸载记录](mobile-plugin-uninstall-v0.0.3.md)保留；新预览绑定原生代次，后台使旧计划失效 | 仅证明安全的非活动资源；活动来源仍须明确手动替代或停止，不自动选首项。完整运行替代/停止继续实施 | 移动设备卸载及故障恢复尚未验收，不把前台 owner 接线当作整个 A22 完成 |
-| A23 | 两入口及真实有界目录保留；新增[宿主前台到期检查](mobile-release-foreground-v0.0.3.md)：已保存客户端渠道、单worker deadline、manual/auto去重、真实200/304验证缓存及原偏好owned回执/确认。后台停止发起，旧代次不交付 | 内核仍手动目录；前台与OS后台分别说明。安装器/商店或测试渠道、OS调度及安装后版本确认仍未适配，不把目录检查称作安装成功 | **已后置**runtime/bundle装配；签名/商店发行未授权，设备前后台验收仍待执行 |
+| A23 | 两入口及真实有界目录保留；新增[宿主前台到期检查](mobile-release-foreground-v0.0.3.md)：已保存客户端渠道、单worker deadline、manual/auto去重、真实200/304验证缓存及原偏好owned回执/确认。后台停止发起，旧代次不交付 | 内核仍手动目录；前台与OS后台分别说明。Android 新增真实安全下载、系统安装器用户确认和安装后身份/版本核对；Play 来源转真实商店。iOS 保留原限制，Android 正向安装/取消/恢复与 API24/Galaxy S8 尚待设备及同签名发行物，不把构建或目录检查称作安装成功 | **已后置**runtime/bundle装配；签名/商店发行未授权，设备前后台验收仍待执行 |
 | A24 | 产品/作者/标识/实际客户端版本/链接/许可原文搜索及About测试 | 四项许可资料缺口继续保留，不能用他包版权补齐 | 真实运行/随包Zero版本依赖尚未接入的产物 |
 
 ## 其它独立用户能力

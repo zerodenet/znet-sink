@@ -30,7 +30,7 @@ export function validReleaseCatalog(c: MobileReleaseCatalog): boolean {
     || (c.responseStatus !== 200 && c.responseStatus !== 304) || c.reusedValidatedCache !== (c.responseStatus === 304)
     || !u64(c.checkedAtUnixMs) || !Number.isSafeInteger(c.catalogLimit) || c.catalogLimit <= 0 || c.catalogLimit > 30
     || !Array.isArray(c.releases) || c.releases.length > c.catalogLimit || typeof c.targetReason !== 'string' || c.targetReason.length > 4096
-    || c.targetStatus !== (c.source === 'client' ? 'installation-not-adapted' : 'bundled-via-client')) return false;
+    || (c.source === 'kernel' ? c.targetStatus !== 'bundled-via-client' : c.targetStatus !== 'installation-not-adapted' && !(c.platform === 'android' && c.targetStatus === 'android-system-installer'))) return false;
   const project = c.source === 'client' ? 'znet-sink' : 'core';
   const releaseUrl = new RegExp(`^https://github\\.com/zerodenet/${project}/releases/tag/v?[0-9A-Za-z.+-]+$`);
   return c.releases.every(r => !!r && typeof r.tagName === 'string' && r.tagName.length > 0 && r.tagName.length <= 256
@@ -38,7 +38,12 @@ export function validReleaseCatalog(c: MobileReleaseCatalog): boolean {
     && (c.source === 'client' ? r.kernelChannel === null : r.kernelChannel === ({stable: 'stable', preview: 'beta', test: 'nightly'} as const)[c.channel])
     && (r.notes === null || (typeof r.notes === 'string' && new TextEncoder().encode(r.notes).byteLength <= 65536))
     && typeof r.notesTruncated === 'boolean' && (r.publishedAt === null || (typeof r.publishedAt === 'string' && r.publishedAt.length <= 128))
-    && typeof r.releaseUrl === 'string' && r.releaseUrl.length <= 1024 && releaseUrl.test(r.releaseUrl));
+    && typeof r.releaseUrl === 'string' && r.releaseUrl.length <= 1024 && releaseUrl.test(r.releaseUrl)
+    && (r.androidAssets === undefined || Array.isArray(r.androidAssets) && r.androidAssets.length <= 16 && r.androidAssets.every(a =>
+      !!a && c.source === 'client' && u64(a.assetId) && a.assetId !== '0'
+      && /^[0-9a-f]{64}$/.test(a.sha256) && /^[A-Za-z0-9._-]{1,180}\.apk$/.test(a.name)
+      && u64(a.sizeBytes) && BigInt(a.sizeBytes) > 0n && BigInt(a.sizeBytes) <= 536870912n
+      && a.url === `https://github.com/zerodenet/znet-sink/releases/download/${r.tagName}/${a.name}`)));
 }
 
 export class MobileReleaseBrowser {

@@ -1,9 +1,11 @@
 //! Mobile UI composition. No UI-owned child, TUN, scheduler or exit teardown.
 //! Native forwarding must be owned by VpnService/PacketTunnelProvider when
 //! the complete runtime bridge is available.
+#[cfg(target_os = "ios")]
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
+#[cfg(target_os = "ios")]
 use crate::lifecycle::OnPhase;
 
 pub(crate) fn run() {
@@ -27,22 +29,30 @@ pub(crate) fn run() {
             }) {
                 crate::services::file_logger::line(&error.message);
             }
-            let data = Arc::new(Mutex::new(None));
-            crate::lifecycle::phases::ConfigPhase { data: data.clone() }
-                .run()
-                .map_err(|error| std::io::Error::other(error.message))?;
-            let startup = data
-                .lock()
-                .expect("mobile startup lock")
-                .take()
-                .expect("mobile config phase should provide startup data");
-            app.manage(crate::state::app_state::AppState::with_domain_data(
-                startup.app_config,
-                startup.domain_data.proxy_configs,
-                startup.domain_data.subscriptions,
-                startup.domain_data.rule_sets,
-                startup.logs,
-            ));
+            #[cfg(target_os = "android")]
+            app.manage(
+                super::android_jobs::shared_state()
+                    .map_err(|error| std::io::Error::other(error.message))?,
+            );
+            #[cfg(target_os = "ios")]
+            {
+                let data = Arc::new(Mutex::new(None));
+                crate::lifecycle::phases::ConfigPhase { data: data.clone() }
+                    .run()
+                    .map_err(|error| std::io::Error::other(error.message))?;
+                let startup = data
+                    .lock()
+                    .expect("mobile startup lock")
+                    .take()
+                    .expect("mobile config phase should provide startup data");
+                app.manage(crate::state::app_state::AppState::with_domain_data(
+                    startup.app_config,
+                    startup.domain_data.proxy_configs,
+                    startup.domain_data.subscriptions,
+                    startup.domain_data.rule_sets,
+                    startup.logs,
+                ));
+            }
             // UI disappearance does not own service shutdown. Do not launch
             // desktop subscription/probe timers and call them mobile jobs.
             Ok(())

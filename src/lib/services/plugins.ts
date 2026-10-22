@@ -26,7 +26,7 @@ export interface PluginPlatform {
   generation: string; executionAllowed: boolean; externalInstallationAllowed: boolean;
   isolation: 'bounded-in-process-interpreter'; reason: string | null;
   secureStorageAdapter?: boolean;
-  taskScheduling?: { mode: 'foreground-only'; state: 'available' | 'deferred'; reason: string };
+  taskScheduling?: { mode: 'foreground-only' | 'android-job-scheduler'; state: 'available' | 'deferred'; reason: string };
 }
 export interface PluginConfigurationOption { value: string; label: string }
 export interface PluginConfigurationField {

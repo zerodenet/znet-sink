@@ -99,10 +99,24 @@ pub(crate) fn save_proxy_configs(dir: &Path, items: &[ProxyConfigProfile]) -> Ap
 }
 
 pub(crate) fn save_subscriptions(dir: &Path, items: &[SubscriptionProfile]) -> AppResult<()> {
+    save_subscriptions_authorized(dir, items, &|| Ok(()))
+}
+
+/// Recheck the original authority after acquiring SQLite's writer slot and at
+/// the durable commit boundary. A caller stopped during busy-lock wait cannot
+/// publish a previously admitted candidate after that wait ends.
+pub(crate) fn save_subscriptions_authorized(
+    dir: &Path,
+    items: &[SubscriptionProfile],
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    authorize()?;
     let mut connection = open(dir)?;
     import_legacy_json_once(&mut connection, dir)?;
     let transaction = immediate_transaction(&mut connection)?;
+    authorize()?;
     replace_subscriptions(&transaction, items)?;
+    authorize()?;
     commit_and_restrict(transaction, dir)
 }
 
@@ -111,11 +125,23 @@ pub(crate) fn save_domain_data(
     proxy_configs: &[ProxyConfigProfile],
     subscriptions: &[SubscriptionProfile],
 ) -> AppResult<()> {
+    save_domain_data_authorized(dir, proxy_configs, subscriptions, &|| Ok(()))
+}
+
+pub(crate) fn save_domain_data_authorized(
+    dir: &Path,
+    proxy_configs: &[ProxyConfigProfile],
+    subscriptions: &[SubscriptionProfile],
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    authorize()?;
     let mut connection = open(dir)?;
     import_legacy_json_once(&mut connection, dir)?;
     let transaction = immediate_transaction(&mut connection)?;
+    authorize()?;
     replace_proxy_configs(&transaction, proxy_configs)?;
     replace_subscriptions(&transaction, subscriptions)?;
+    authorize()?;
     commit_and_restrict(transaction, dir)
 }
 

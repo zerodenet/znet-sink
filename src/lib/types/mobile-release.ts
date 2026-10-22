@@ -30,7 +30,9 @@ export interface MobileRelease {
   notes: string | null;
   notesTruncated: boolean;
   releaseUrl: string;
+  androidAssets?: AndroidReleaseAsset[];
 }
+export interface AndroidReleaseAsset { assetId: string; name: string; url: string; sha256: string; sizeBytes: string }
 export interface MobileReleaseCatalog {
   source: MobileReleaseSource;
   channel: MobileReleaseChannel;
@@ -38,11 +40,35 @@ export interface MobileReleaseCatalog {
   checkedAtUnixMs: string;
   catalogLimit: number;
   releases: MobileRelease[];
-  targetStatus: 'bundled-via-client' | 'installation-not-adapted';
+  targetStatus: 'bundled-via-client' | 'installation-not-adapted' | 'android-system-installer';
   targetReason: string;
   requestId: string;
   responseStatus: 200 | 304;
   reusedValidatedCache: boolean;
+}
+
+export type AndroidUpdateState = 'idle' | 'queued' | 'downloading' | 'paused' | 'verifying' | 'ready' | 'preparing-install' | 'awaiting-user' | 'installing' | 'installed-confirmed' | 'cancelled' | 'failed' | 'unknown' | 'store-managed';
+export interface AndroidUpdateSnapshot {
+  state: AndroidUpdateState;
+  operationId: string | null;
+  reason: string | null;
+  packageName: string;
+  installedVersion: string;
+  installedVersionCode: string;
+  targetVersion: string | null;
+  targetVersionCode: string | null;
+  downloadedBytes: string;
+  sizeBytes: string | null;
+  assetName: string | null;
+  sha256: string | null;
+  installPermission: 'allowed' | 'blocked' | 'system-confirmation';
+  confirmationAvailable: boolean;
+  installerStatus: number | null;
+}
+export interface AndroidUpdateGateway {
+  status(): Promise<AndroidUpdateSnapshot>;
+  download(channel: MobileReleaseChannel, tag: string, asset: AndroidReleaseAsset, operationId: string): Promise<AndroidUpdateSnapshot>;
+  action(action: 'install' | 'confirm' | 'cancel' | 'settings' | 'store', operationId: string | null): Promise<AndroidUpdateSnapshot>;
 }
 export interface ReleaseScheduleSnapshot {
   hostSessionId: string;

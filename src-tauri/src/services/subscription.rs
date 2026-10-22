@@ -31,6 +31,7 @@ mod plugin_cleanup;
 #[path = "subscription/sync_complete.rs"]
 mod sync_complete;
 pub use sync_complete::complete_managed_sync_authorized;
+pub(crate) use sync_complete::complete_managed_sync_authorized_state;
 #[cfg(test)]
 pub(crate) use sync_complete::complete_managed_sync_in_acceptance_store;
 
@@ -255,6 +256,94 @@ where
         authorize,
     )
     .await
+}
+
+/// OS workers share the same domain owner as the UI but have no Activity.
+/// Local inactive resources can be removed under the same namespace rules;
+/// deleting an active managed configuration still requires foreground runtime
+/// coordination and is rejected before mutating any relationship.
+pub(crate) async fn remove_managed_authorized_state<F>(
+    state: &AppState,
+    app_handle: Option<AppHandle>,
+    id: String,
+    remove_associated_config: bool,
+    plugin_id: String,
+    authorize: F,
+) -> AppResult<SubscriptionRemovalOutcome>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    if let Some(app) = app_handle {
+        return remove_managed_authorized(app, id, remove_associated_config, plugin_id, authorize)
+            .await;
+    }
+    let id = normalize_required(id, "id")?;
+    let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
+    let _operation = state.proxy_config_operation().lock().await;
+    authorize()?;
+    let previous_profiles = lock(state.proxy_configs(), "proxy_config")?.clone();
+    let previous_subscriptions = lock(state.subscriptions(), "subscription")?.clone();
+    let app = lock(state.app_config(), "app_config")?.clone();
+    let subscription = previous_subscriptions
+        .iter()
+        .find(|profile| profile.id == id)
+        .ok_or_else(|| AppError::not_found("subscription", id.clone()))?;
+    ensure_managed_subscription_owner(state, subscription, &plugin_id)?;
+    let mut removed_proxy_config = false;
+    let mut next_profiles = previous_profiles.clone();
+    if remove_associated_config {
+        if let Some(target_id) = subscription.target_proxy_config_id.as_deref() {
+            let shared_count = shared_target_count(&previous_subscriptions, &id, target_id);
+            if shared_count > 0 {
+                return Err(AppError::invalid_argument(format!(
+                    "associated proxy config is still used by {shared_count} other subscription(s)"
+                )));
+            }
+            if let Some(target) = previous_profiles
+                .iter()
+                .find(|profile| profile.id == target_id)
+            {
+                if target.active {
+                    return Err(AppError::invalid_argument(
+                        "后台不能删除使用中的托管配置；请返回前台预览替代或停止并核对运行状态",
+                    ));
+                }
+                next_profiles.retain(|profile| profile.id != target_id);
+                removed_proxy_config = true;
+            }
+        }
+    }
+    let next_subscriptions = previous_subscriptions
+        .iter()
+        .filter(|profile| profile.id != id)
+        .cloned()
+        .collect();
+    authorize()?;
+    crate::configuration::persistence::commit_checked_authorized(
+        state,
+        &previous_profiles,
+        &previous_subscriptions,
+        &app,
+        next_profiles,
+        next_subscriptions,
+        !removed_proxy_config,
+        None,
+        None,
+        None,
+        &authorize,
+    )?;
+    // This is a separate persisted resource domain. A failure remains visible
+    // to the original attempt rather than falsely reporting all cleanup done.
+    let removed_managed_rule_set_count = if remove_associated_config {
+        authorize()?;
+        rule_set::remove_managed_subscription_rule_sets_authorized(state, &id, &authorize)?
+    } else {
+        0
+    };
+    Ok(SubscriptionRemovalOutcome {
+        removed_proxy_config,
+        removed_managed_rule_set_count,
+    })
 }
 
 async fn remove_authorized<F>(
@@ -995,13 +1084,24 @@ async fn prepare_parsed_subscription(
     if let Some(guard) = commit_guard {
         guard()?;
     }
-    let outcome = rule_set::sync_managed_subscription_sources(
-        state,
-        &subscription.id,
-        &subscription.name,
-        sources,
-    )
-    .await?;
+    let outcome = if let Some(guard) = commit_guard {
+        rule_set::sync_managed_subscription_sources_authorized(
+            state,
+            &subscription.id,
+            &subscription.name,
+            sources,
+            Some(guard),
+        )
+        .await?
+    } else {
+        rule_set::sync_managed_subscription_sources(
+            state,
+            &subscription.id,
+            &subscription.name,
+            sources,
+        )
+        .await?
+    };
     if let Some(guard) = commit_guard {
         guard()?;
     }
@@ -1026,6 +1126,22 @@ pub async fn apply_managed(
 
 pub async fn apply_managed_authorized<F>(
     app_handle: AppHandle,
+    input: ManagedSubscriptionApply,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    let state = app_handle.state::<AppState>();
+    apply_managed_authorized_state(state.inner(), Some(app_handle.clone()), input, authorize).await
+}
+
+/// The same production preparation/ownership path is used by OS-owned jobs.
+/// Without a UI runtime handle publication is local-only and remains pending
+/// apply; a successful material sync never claims that VPN/runtime changed.
+pub(crate) async fn apply_managed_authorized_state<F>(
+    state: &AppState,
+    app_handle: Option<AppHandle>,
     input: ManagedSubscriptionApply,
     authorize: F,
 ) -> AppResult<SubscriptionProfile>
@@ -1076,7 +1192,6 @@ where
         revision: input.revision,
         source_name: Some(source_name.clone()),
     };
-    let state = app_handle.state::<AppState>();
     let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
     let now = now_unix_ms();
     authorize()?;
@@ -1106,57 +1221,77 @@ where
         )?;
     }
 
-    let metadata = SyncMetadata {
-        node_count: Some(count_proxy_nodes(&parsed.content)),
-        ..SyncMetadata::default()
-    };
-    let parsed = prepare_parsed_subscription(
-        state.inner(),
-        &profile,
-        parsed,
-        DEFAULT_USER_AGENT.into(),
-        Some(&authorize),
-    )
-    .await?;
+    let previous_rules = rule_set::subscription_sources(state, &id)?;
+    let phase = SyncPublicationState::new();
+    let result = async {
+        let metadata = SyncMetadata {
+            node_count: Some(count_proxy_nodes(&parsed.content)),
+            ..SyncMetadata::default()
+        };
+        let parsed = prepare_parsed_subscription(
+            state,
+            &profile,
+            parsed,
+            DEFAULT_USER_AGENT.into(),
+            Some(&authorize),
+        )
+        .await?;
 
-    profile.target_proxy_config_id = Some(target_proxy_config_id.clone());
-    profile.last_sync_at_unix_ms = Some(now);
-    profile.last_error = None;
-    profile.updated_at_unix_ms = now;
-    profile.node_count = metadata.node_count;
-    profile.upload_bytes = metadata.upload_bytes;
-    profile.download_bytes = metadata.download_bytes;
-    profile.total_bytes = metadata.total_bytes;
-    profile.expire_at_unix_ms = metadata.expire_at_unix_ms;
-    let staged = next_subscriptions
-        .iter_mut()
-        .find(|candidate| candidate.id == id)
-        .ok_or_else(|| AppError::internal("failed to stage managed subscription"))?;
-    *staged = profile.clone();
+        profile.target_proxy_config_id = Some(target_proxy_config_id.clone());
+        profile.last_sync_at_unix_ms = Some(now);
+        profile.last_error = None;
+        profile.updated_at_unix_ms = now;
+        profile.node_count = metadata.node_count;
+        profile.upload_bytes = metadata.upload_bytes;
+        profile.download_bytes = metadata.download_bytes;
+        profile.total_bytes = metadata.total_bytes;
+        profile.expire_at_unix_ms = metadata.expire_at_unix_ms;
+        let staged = next_subscriptions
+            .iter_mut()
+            .find(|candidate| candidate.id == id)
+            .ok_or_else(|| AppError::internal("failed to stage managed subscription"))?;
+        *staged = profile.clone();
 
-    let input = prepare_synced_proxy_config_upsert(
-        state.inner(),
-        &profile,
-        &target_proxy_config_id,
-        parsed,
-    )?;
-    authorize()?;
-    proxy_config::upsert_managed_subscription_runtime(
-        app_handle.clone(),
-        input,
-        managed_source,
-        previous_subscriptions,
-        next_subscriptions,
-    )
-    .await?;
+        let input =
+            prepare_synced_proxy_config_upsert(state, &profile, &target_proxy_config_id, parsed)?;
+        authorize()?;
+        phase.set(SyncPublicationPhase::Publishing);
+        if let Some(app) = app_handle.as_ref() {
+            proxy_config::upsert_managed_subscription_runtime(
+                app.clone(),
+                input,
+                managed_source,
+                previous_subscriptions,
+                next_subscriptions,
+            )
+            .await?;
+        } else {
+            proxy_config::save_managed_subscription_pending(
+                state,
+                input,
+                managed_source,
+                previous_subscriptions,
+                next_subscriptions,
+                &authorize,
+            )
+            .await?;
+        }
 
-    let committed = lock(state.subscriptions(), "subscription")?
-        .iter()
-        .find(|candidate| candidate.id == id)
-        .cloned()
-        .ok_or_else(|| AppError::internal("managed subscription was not committed"))?;
-    let _ = app_handle.emit("subscriptions:updated", json!({"subscriptionId": id}));
-    Ok(committed)
+        phase.set(SyncPublicationPhase::Published);
+        let committed = lock(state.subscriptions(), "subscription")?
+            .iter()
+            .find(|candidate| candidate.id == id)
+            .cloned()
+            .ok_or_else(|| AppError::internal("managed subscription was not committed"))?;
+        if let Some(app) = app_handle {
+            let _ = app.emit("subscriptions:updated", json!({"subscriptionId": id}));
+        }
+        Ok(committed)
+    }
+    .await;
+    finish_sync_publication(result, phase.get(), || {
+        rule_set::restore_subscription_sources_authorized(state, &id, previous_rules, &authorize)
+    })
 }
 
 /// Refresh provider-reported quota without reapplying (or even receiving)
@@ -1170,23 +1305,34 @@ pub fn update_managed_metadata_authorized<F>(
 where
     F: Fn() -> AppResult<()>,
 {
-    let (id, owner, usage) = validate_managed_metadata_input(input)?;
     let state = app_handle.state::<AppState>();
+    update_managed_metadata_authorized_state(state.inner(), Some(&app_handle), input, authorize)
+}
+
+pub(crate) fn update_managed_metadata_authorized_state<F>(
+    state: &AppState,
+    app_handle: Option<&AppHandle>,
+    input: ManagedSubscriptionMetadataUpdate,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()>,
+{
+    let (id, owner, usage) = validate_managed_metadata_input(input)?;
     let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
     authorize()?;
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
     authorize()?;
-    let (next, updated) = commit_managed_metadata(
-        &subscriptions,
-        &id,
-        &owner,
-        &usage,
-        now_unix_ms(),
-        domain_store::save_subscriptions,
-    )?;
+    let (next, updated) =
+        commit_managed_metadata(&subscriptions, &id, &owner, &usage, now_unix_ms(), |next| {
+            authorize()?;
+            domain_store::save_subscriptions_authorized(next, &authorize)
+        })?;
     *subscriptions = next;
     drop(subscriptions);
-    let _ = app_handle.emit("subscriptions:updated", json!({"subscriptionId": id}));
+    if let Some(app) = app_handle {
+        let _ = app.emit("subscriptions:updated", json!({"subscriptionId": id}));
+    }
     Ok(updated)
 }
 
@@ -4732,3 +4878,7 @@ mod capability_tests;
 #[cfg(test)]
 #[path = "subscription_stack_tests.rs"]
 mod stack_tests;
+
+#[cfg(test)]
+#[path = "subscription/headless_tests.rs"]
+mod headless_tests;

@@ -44,6 +44,17 @@ class NativeIoPlugin(private val activity: Activity) : Plugin(activity) {
     private val vault by lazy { NativeVault(activity.applicationContext) }
     private val readingVault = AtomicBoolean(false)
     @Command
+    fun appUpdate(invoke: Invoke) = NativeAppUpdates.command(activity, invoke)
+
+    @Command
+    fun pluginJobsStatus(invoke: Invoke) {
+        if (invoke.getArgs().length() != 0 || destroyed.get()) { invoke.reject("invalid-job-status-request"); return }
+        try { worker.execute {
+            try { invoke.resolve(JSObject(NativePluginJobs.snapshot(activity.applicationContext))) }
+            catch (_: Exception) { invoke.reject("job-status-unavailable") }
+        } } catch (_: RejectedExecutionException) { invoke.reject("job-status-unavailable") }
+    }
+    @Command
     fun readPluginVaultMaster(invoke: Invoke) {
         val raw = invoke.getArgs()
         if (raw.keys().asSequence().any { it != "create" } || raw.opt("create") !is Boolean || destroyed.get()) {
@@ -96,11 +107,17 @@ class NativeIoPlugin(private val activity: Activity) : Plugin(activity) {
     private val readingLicenses = AtomicBoolean(false)
 
     override fun load(webView: WebView) {
+        NativePluginJobs.ensure(activity.applicationContext)
+        NativeAppUpdates.resume(activity.applicationContext)
         cleanStaging()
     }
 
     override fun onResume() {
-        if (!destroyed.get()) cleanStaging()
+        if (!destroyed.get()) {
+            NativePluginJobs.ensure(activity.applicationContext)
+            NativeAppUpdates.resume(activity.applicationContext)
+            cleanStaging()
+        }
     }
 
     override fun onDestroy(activity: AppCompatActivity) {

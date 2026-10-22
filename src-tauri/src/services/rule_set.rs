@@ -354,6 +354,25 @@ pub(crate) async fn sync_managed_subscription_sources(
     subscription_name: &str,
     sources: Vec<ManagedRuleSetSource>,
 ) -> AppResult<ManagedRuleSetSyncOutcome> {
+    sync_managed_subscription_sources_authorized(
+        state,
+        subscription_id,
+        subscription_name,
+        sources,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn sync_managed_subscription_sources_authorized(
+    state: &AppState,
+    subscription_id: &str,
+    subscription_name: &str,
+    sources: Vec<ManagedRuleSetSource>,
+    authorize: Option<&(dyn Fn() -> AppResult<()> + Send + Sync)>,
+) -> AppResult<ManagedRuleSetSyncOutcome> {
+    let check = || authorize.map_or(Ok(()), |authorize| authorize());
+    check()?;
     let id_prefix = managed_rule_set_id_prefix(subscription_id);
     let current = lock(state.rule_sets(), "rule_set")?.clone();
     let previous_sources = owned_subscription_sources(&current, subscription_id)?;
@@ -363,6 +382,7 @@ pub(crate) async fn sync_managed_subscription_sources(
     let mut failures = Vec::new();
 
     for managed in sources {
+        check()?;
         let id = managed_rule_set_id(&id_prefix, &managed.tag);
         let raw_source = RuleSetSource {
             url: managed.url,
@@ -402,6 +422,7 @@ pub(crate) async fn sync_managed_subscription_sources(
                 .await?
             {
                 FetchOutcome::Modified(resource) => {
+                    check()?;
                     let display_name = format!("{subscription_name} / {}", managed.tag);
                     let artifact = if source.format == "zrs" {
                         let metadata =
@@ -505,7 +526,12 @@ pub(crate) async fn sync_managed_subscription_sources(
         ));
     }
     let next = replace_subscription_sources(&rules, subscription_id, prepared)?;
-    domain_store::save_rule_sets(&next)?;
+    check()?;
+    if let Some(authorize) = authorize {
+        domain_store::save_rule_sets_authorized(&next, authorize)?;
+    } else {
+        domain_store::save_rule_sets(&next)?;
+    }
     *rules = next;
     Ok(ManagedRuleSetSyncOutcome {
         artifacts,
@@ -593,6 +619,28 @@ pub(crate) fn restore_subscription_sources(
     }
     let next = replace_subscription_sources(&rules, subscription_id, previous)?;
     domain_store::save_rule_sets(&next)?;
+    *rules = next;
+    Ok(())
+}
+
+/// A plugin rollback retains the original authority too: revocation/uninstall
+/// must not resurrect an old rule catalog while cleanup waits for a file lock.
+pub(crate) fn restore_subscription_sources_authorized(
+    state: &AppState,
+    subscription_id: &str,
+    previous: Vec<RuleSetProfile>,
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    let mut rules = lock(state.rule_sets(), "rule_set")?;
+    if subscription_sources_match(
+        &owned_subscription_sources(&rules, subscription_id)?,
+        &previous,
+    )? {
+        return Ok(());
+    }
+    let next = replace_subscription_sources(&rules, subscription_id, previous)?;
+    authorize()?;
+    domain_store::save_rule_sets_authorized(&next, authorize)?;
     *rules = next;
     Ok(())
 }
@@ -720,6 +768,30 @@ pub(crate) fn remove_managed_subscription_rule_sets(
     // Immutable ZRS generations are retained until a later garbage-collection
     // pass because a running kernel may still have one memory-mapped.
     domain_store::save_rule_sets(&next)?;
+    *items = next;
+    Ok(removed)
+}
+
+pub(crate) fn remove_managed_subscription_rule_sets_authorized(
+    state: &AppState,
+    subscription_id: &str,
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<usize> {
+    let mut items = lock(state.rule_sets(), "rule_set")?;
+    // Exact namespace and ownership must both match; a colliding tag/prefix
+    // never authorizes deleting an ordinary or foreign resource.
+    owned_subscription_sources(&items, subscription_id)?;
+    let mut next = items.clone();
+    let before = next.len();
+    next.retain(|item| item.managed_by_subscription_id.as_deref() != Some(subscription_id));
+    let removed = before.saturating_sub(next.len());
+    if removed == 0 {
+        return Ok(0);
+    }
+    // Immutable ZRS generations are retained until a later garbage-collection
+    // pass because a running kernel may still have one memory-mapped.
+    authorize()?;
+    domain_store::save_rule_sets_authorized(&next, authorize)?;
     *items = next;
     Ok(removed)
 }

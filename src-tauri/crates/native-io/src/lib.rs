@@ -1,5 +1,9 @@
 //! Host-only native document boundary. There are deliberately no WebView plugin commands.
 //! Run blocking methods on a worker thread; system controllers outlive page navigation.
+mod app_update;
+pub use app_update::{AppUpdateRequest, AppUpdateSnapshot};
+mod plugin_jobs;
+pub use plugin_jobs::PluginJobsSnapshot;
 mod policy;
 mod vault;
 #[cfg(any(test, all(target_os = "ios", debug_assertions)))]
@@ -85,6 +89,42 @@ impl<R: Runtime, T: Manager<R>> NativeIoExt<R> for T {
     }
 }
 impl<R: Runtime> NativeIo<R> {
+    pub fn plugin_jobs_status(&self) -> Result<PluginJobsSnapshot> {
+        #[cfg(target_os = "android")]
+        {
+            let snapshot: PluginJobsSnapshot = self
+                .handle
+                .run_mobile_plugin(
+                    "pluginJobsStatus",
+                    std::collections::BTreeMap::<String, String>::new(),
+                )
+                .map_err(|_| Error::BridgeResultUnknown)?;
+            if !snapshot.valid() {
+                return Err(Error::InvalidReceipt("invalid_plugin_job_snapshot"));
+            }
+            Ok(snapshot)
+        }
+        #[cfg(not(target_os = "android"))]
+        Err(Error::Unavailable)
+    }
+    pub fn app_update(&self, request: &AppUpdateRequest) -> Result<AppUpdateSnapshot> {
+        if !request.valid() {
+            return Err(Error::InvalidRequest("invalid_app_update_request"));
+        }
+        #[cfg(target_os = "android")]
+        {
+            let snapshot: AppUpdateSnapshot = self
+                .handle
+                .run_mobile_plugin("appUpdate", request)
+                .map_err(|_| Error::BridgeResultUnknown)?;
+            if !snapshot.valid() {
+                return Err(Error::InvalidReceipt("invalid_app_update_snapshot"));
+            }
+            Ok(snapshot)
+        }
+        #[cfg(not(target_os = "android"))]
+        Err(Error::Unavailable)
+    }
     #[cfg(all(target_os = "ios", debug_assertions))]
     pub fn plugin_vault_smoke_diagnostics(&self, nonce: &str) -> Result<VaultSmokeDiagnostics> {
         if nonce.len() != 32

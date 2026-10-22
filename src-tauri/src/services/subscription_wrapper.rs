@@ -244,6 +244,69 @@ where
         .map(present_profile)
 }
 
+pub(crate) async fn apply_managed_authorized_state<F>(
+    state: &AppState,
+    app: Option<AppHandle>,
+    mut input: ManagedSubscriptionApply,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    input.format = storage_format(Some(&input.format));
+    original::apply_managed_authorized_state(state, app, input, authorize)
+        .await
+        .map(present_profile)
+}
+
+pub(crate) fn update_managed_metadata_authorized_state<F>(
+    state: &AppState,
+    app: Option<&AppHandle>,
+    input: ManagedSubscriptionMetadataUpdate,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()>,
+{
+    original::update_managed_metadata_authorized_state(state, app, input, authorize)
+        .map(present_profile)
+}
+
+pub(crate) fn complete_managed_sync_authorized_state<F>(
+    state: &AppState,
+    app: Option<&AppHandle>,
+    input: ManagedSubscriptionSyncComplete,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()>,
+{
+    original::complete_managed_sync_authorized_state(state, app, input, authorize)
+        .map(present_profile)
+}
+
+pub(crate) async fn remove_managed_authorized_state<F>(
+    state: &AppState,
+    app: Option<AppHandle>,
+    id: String,
+    remove_associated_config: bool,
+    plugin_id: String,
+    authorize: F,
+) -> AppResult<SubscriptionRemovalOutcome>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    original::remove_managed_authorized_state(
+        state,
+        app,
+        id,
+        remove_associated_config,
+        plugin_id,
+        authorize,
+    )
+    .await
+}
+
 pub fn update_managed_metadata_authorized<F>(
     app_handle: AppHandle,
     input: ManagedSubscriptionMetadataUpdate,

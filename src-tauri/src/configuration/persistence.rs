@@ -187,6 +187,7 @@ pub(crate) fn commit_workspace_if_current(
         Some((&binding.scope, binding.generation)),
         Some(binding.domain_epoch),
         Some(binding),
+        None,
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -215,6 +216,39 @@ pub(crate) fn commit_checked(
         expected_scope,
         None,
         None,
+        None,
+    )
+}
+/// OS-owned plugin writes retain the original lease through each blocking
+/// domain/file/database acquisition and the final durable publication point.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn commit_checked_authorized(
+    state: &AppState,
+    previous_profiles: &[ProxyConfigProfile],
+    previous_subscriptions: &[SubscriptionProfile],
+    expected_app: &crate::models::app_config::AppConfig,
+    next_profiles: Vec<ProxyConfigProfile>,
+    next_subscriptions: Vec<SubscriptionProfile>,
+    preserve_binding: bool,
+    directory: Option<&std::path::Path>,
+    expected_rules: Option<&str>,
+    expected_scope: Option<(&crate::client_core::ClientScope, u64)>,
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    commit_checked_with_epoch(
+        state,
+        previous_profiles,
+        previous_subscriptions,
+        expected_app,
+        next_profiles,
+        next_subscriptions,
+        preserve_binding,
+        directory,
+        expected_rules,
+        expected_scope,
+        None,
+        None,
+        Some(authorize),
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -231,9 +265,13 @@ fn commit_checked_with_epoch(
     expected_scope: Option<(&crate::client_core::ClientScope, u64)>,
     expected_epoch: Option<i64>,
     expected_files: Option<&super::workspace::Binding>,
+    authorize: Option<&dyn Fn() -> AppResult<()>>,
 ) -> AppResult<()> {
     let mut profiles = lock(state.proxy_configs(), "proxy_config")?;
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
+    if let Some(authorize) = authorize {
+        authorize()?;
+    }
     ensure_graph_current(
         &profiles,
         &subscriptions,
@@ -320,6 +358,7 @@ fn commit_checked_with_epoch(
                 directory,
                 expected_epoch,
                 published_epoch: std::cell::Cell::new(None),
+                authorize,
             };
             znet_client_core::publication::publish(&transaction).map_err(publication_error)?;
         }
@@ -372,6 +411,7 @@ struct CheckedPublication<'a> {
     directory: Option<&'a std::path::Path>,
     expected_epoch: Option<i64>,
     published_epoch: std::cell::Cell<Option<i64>>,
+    authorize: Option<&'a dyn Fn() -> AppResult<()>>,
 }
 impl Publication for CheckedPublication<'_> {
     type Error = AppError;
@@ -392,6 +432,19 @@ impl Publication for CheckedPublication<'_> {
             self.published_epoch.set(Some(next));
             return Ok(());
         }
+        if let Some(authorize) = self.authorize {
+            let dir = self
+                .directory
+                .map(std::path::Path::to_path_buf)
+                .map(Ok)
+                .unwrap_or_else(crate::services::data_dir)?;
+            return crate::services::app_database::save_domain_data_authorized(
+                &dir,
+                self.next_profiles,
+                self.next_subscriptions,
+                authorize,
+            );
+        }
         match self.directory {
             Some(dir) => domain_store::save_relational_data_to_dir(
                 dir,
@@ -402,6 +455,20 @@ impl Publication for CheckedPublication<'_> {
         }
     }
     fn project(&self) -> AppResult<()> {
+        if let Some(authorize) = self.authorize {
+            let dir = self
+                .directory
+                .map(std::path::Path::to_path_buf)
+                .map(Ok)
+                .unwrap_or_else(crate::services::data_dir)?;
+            return crate::services::app_config::compare_and_replace_local_at_authorized(
+                self.state,
+                self.expected_app,
+                self.candidate.clone(),
+                &dir.join("app-config.json"),
+                authorize,
+            );
+        }
         if let Some(dir) = self.directory {
             return crate::services::app_config::compare_and_replace_local_at(
                 self.state,

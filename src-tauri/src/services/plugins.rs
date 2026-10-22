@@ -1,4 +1,6 @@
 //! Component owner. Verified material only; guest IO stays in capability executors.
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod background;
 mod callback;
 mod configuration;
 mod discovery;

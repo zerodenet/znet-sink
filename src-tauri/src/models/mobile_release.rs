@@ -69,6 +69,18 @@ pub struct MobileRelease {
     pub notes: Option<String>,
     pub notes_truncated: bool,
     pub release_url: String,
+    /// Candidates are authenticated catalog facts, not an APK compatibility verdict.
+    pub android_assets: Vec<AndroidReleaseAsset>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidReleaseAsset {
+    pub asset_id: String,
+    pub name: String,
+    pub url: String,
+    pub sha256: String,
+    pub size_bytes: String,
 }
 
 #[derive(Clone, Debug, Serialize)]

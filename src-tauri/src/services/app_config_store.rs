@@ -99,6 +99,20 @@ fn save_impl(path: &Path, config: &AppConfig, owner: Option<&str>) -> AppResult<
     let mut history = file_history::acquire(path, Domain::AppConfig)?;
     save_guarded(&mut history, config, owner)
 }
+/// Lease-aware writes recheck after both store and OS file-history locks.
+pub(crate) fn save_authorized(
+    path: &Path,
+    config: &AppConfig,
+    authorize: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    let _guard = STORE_LOCK
+        .lock()
+        .map_err(|_| AppError::internal("app config store lock poisoned"))?;
+    let mut history = file_history::acquire(path, Domain::AppConfig)?;
+    authorize()?;
+    save_guarded_authorized(&mut history, config, None, Some(authorize)).map(|_| ())
+}
+
 /// Owning callers hold AppState's typed CAS guard before the OS history guard.
 /// This deliberately does not acquire STORE_LOCK or the same OS lock again.
 pub(crate) fn save_owned_locked(
@@ -116,6 +130,17 @@ fn save_guarded(
     config: &AppConfig,
     owner: Option<&str>,
 ) -> AppResult<WriteReceipt> {
+    save_guarded_authorized(history, config, owner, None)
+}
+fn save_guarded_authorized(
+    history: &mut file_history::Guard,
+    config: &AppConfig,
+    owner: Option<&str>,
+    authorize: Option<&dyn Fn() -> AppResult<()>>,
+) -> AppResult<WriteReceipt> {
+    if let Some(authorize) = authorize {
+        authorize()?;
+    }
     history.token()?;
     let path = history.path().to_path_buf();
     let path = path.as_path();
@@ -134,10 +159,18 @@ fn save_guarded(
     };
     let (_, receipt) = history.mutate(&content, backup_content.as_deref(), owner, || {
         if let Some(bytes) = &backup_content {
-            atomic_file::write(&backup, bytes)
-                .map_err(|error| io_error(&backup, "write", error))?;
+            if let Some(authorize) = authorize {
+                atomic_file::write_authorized(&backup, bytes, authorize)?;
+            } else {
+                atomic_file::write(&backup, bytes)
+                    .map_err(|error| io_error(&backup, "write", error))?;
+            }
         }
-        atomic_file::write(path, &content).map_err(|error| io_error(path, "write", error))
+        if let Some(authorize) = authorize {
+            atomic_file::write_authorized(path, &content, authorize)
+        } else {
+            atomic_file::write(path, &content).map_err(|error| io_error(path, "write", error))
+        }
     })?;
     Ok(receipt)
 }

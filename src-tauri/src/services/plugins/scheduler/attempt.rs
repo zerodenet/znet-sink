@@ -171,7 +171,7 @@ impl Attempt {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum Completion {
+pub(in crate::services::plugins) enum Completion {
     Known(bool),
     Unconfirmed,
 }

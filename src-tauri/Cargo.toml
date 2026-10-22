@@ -98,3 +98,6 @@ objc2-user-notifications = { version = "=0.3.2", features = ["block2", "UNNotifi
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 notify-rust = "=4.18.0"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "=0.21.1"

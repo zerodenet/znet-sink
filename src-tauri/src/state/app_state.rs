@@ -19,7 +19,19 @@ use crate::models::{
     rule_set::RuleSetProfile, subscription::SubscriptionProfile,
 };
 
-pub struct AppState {
+/// One process-wide service owner can be shared by the UI and a cold Android
+/// JobService. Clones never duplicate grants, task flights or cached domain data.
+#[derive(Clone)]
+pub struct AppState(Arc<AppStateInner>);
+
+impl std::ops::Deref for AppState {
+    type Target = AppStateInner;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub struct AppStateInner {
     /// Distinguishes host lifetimes even when local scope counters restart at 1.
     /// Missing secure entropy disables recovery admission; no weak fallback.
     host_session_id: Option<String>,
@@ -75,6 +87,17 @@ impl Default for AppState {
 }
 
 impl AppState {
+    #[cfg(test)]
+    pub(crate) fn with_plugin_fixture(
+        plugins: crate::services::plugins::Host,
+        capabilities: znet_client_core::capability::Manager,
+    ) -> Self {
+        let mut state = Self::default();
+        let inner = Arc::get_mut(&mut state.0).expect("fresh fixture state");
+        inner.plugins = plugins;
+        inner.capabilities = capabilities;
+        state
+    }
     pub(crate) fn plugins(&self) -> &crate::services::plugins::Host {
         &self.plugins
     }
@@ -103,7 +126,7 @@ impl AppState {
         let active_profile_id = active_profile.map(|profile| ProfileId(profile.id.clone()));
         let config_revision = config_revision(active_profile);
 
-        Self {
+        Self(Arc::new(AppStateInner {
             host_session_id: new_host_session_id(),
             plugins: crate::services::plugins::Host::default(),
             #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
@@ -142,7 +165,7 @@ impl AppState {
             runtime_host: crate::runtime_host::Host::default(),
             zero_features_cache: Mutex::new(None),
             shutting_down: Arc::new(AtomicBool::new(false)),
-        }
+        }))
     }
 
     #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
@@ -836,7 +859,9 @@ mod tests {
     #[test]
     fn missing_secure_host_identity_rejects_recovery_admission() {
         let mut state = AppState::default();
-        state.host_session_id = None;
+        std::sync::Arc::get_mut(&mut state.0)
+            .unwrap()
+            .host_session_id = None;
         assert!(state.host_session_id().is_err());
         let _ = state.client_core_snapshot();
     }

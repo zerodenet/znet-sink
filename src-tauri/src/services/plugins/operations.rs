@@ -38,88 +38,112 @@ fn sdk_dispatcher(
     plugin_id: &str,
     component_id: &str,
 ) -> runtime::HostSdkDispatcher {
+    let state = app
+        .state::<crate::state::app_state::AppState>()
+        .inner()
+        .clone();
+    sdk_dispatcher_with_context(
+        state,
+        Some(app),
+        plugin_id,
+        component_id,
+        Arc::new(AtomicBool::new(false)),
+        None,
+    )
+}
+
+/// The same SDK dispatcher is used by the native OS worker and interactive UI.
+/// A background permit is deliberately scoped to this callback's thread: it
+/// cannot make unrelated UI calls admissible while a system job is running.
+fn sdk_dispatcher_with_context(
+    state: crate::state::app_state::AppState,
+    app: Option<tauri::AppHandle>,
+    plugin_id: &str,
+    component_id: &str,
+    cancelled: Arc<AtomicBool>,
+    admission: Option<super::platform::BackgroundPermit>,
+) -> runtime::HostSdkDispatcher {
     let plugin_id = plugin_id.to_owned();
     let component_id = component_id.to_owned();
     Arc::new(move |lease, input| {
         let mut observed_method = None;
         let result = (|| -> AppResult<serde_json::Value> {
+            let _admission = admission
+                .as_ref()
+                .map(|permit| permit.enter())
+                .transpose()?;
+            check_execution_context(&state, &cancelled)?;
             let call: Call = serde_json::from_str(input)
                 .map_err(|_| AppError::invalid_argument("插件 SDK 请求格式无效"))?;
             observed_method = Some(call.method);
             validate_vm_sdk_admissibility(&call)?;
             let method = call.method;
+            require_interactive_delivery(method, app.is_some())?;
             let request = znet_plugin_sandbox::contract::Request {
                 capability: method.capability(),
                 scope: call.request.scope.clone(),
             };
-            let state = app.state::<crate::state::app_state::AppState>();
-            if call.method == Method::SubscriptionApply {
-                let (managed, request) = state
+            let authorize = || {
+                check_execution_context(&state, &cancelled)?;
+                lease
+                    .check(Some(&request))
+                    .map_err(super::sdk::invocation_failure)
+            };
+            if method == Method::SubscriptionApply {
+                let (managed, _) = state
                     .plugins()
                     .managed_subscription_input_with_lease(&plugin_id, lease, call)?;
                 return tauri::async_runtime::block_on(
-                    crate::services::subscription::apply_managed_authorized(
+                    crate::services::subscription::apply_managed_authorized_state(
+                        &state,
                         app.clone(),
                         managed,
-                        || {
-                            lease
-                                .check(Some(&request))
-                                .map_err(super::sdk::invocation_failure)
-                        },
+                        authorize,
                     ),
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
             }
-            if call.method == Method::SubscriptionMetadataUpdate {
-                let (input, request) = state
+            if method == Method::SubscriptionMetadataUpdate {
+                let (input, _) = state
                     .plugins()
                     .managed_subscription_metadata_with_lease(&plugin_id, lease, call)?;
-                return crate::services::subscription::update_managed_metadata_authorized(
-                    app.clone(),
+                return crate::services::subscription::update_managed_metadata_authorized_state(
+                    &state,
+                    app.as_ref(),
                     input,
-                    || {
-                        lease
-                            .check(Some(&request))
-                            .map_err(super::sdk::invocation_failure)
-                    },
+                    authorize,
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
             }
-            if call.method == Method::SubscriptionSyncComplete {
-                let (input, request) = state
+            if method == Method::SubscriptionSyncComplete {
+                let (input, _) = state
                     .plugins()
                     .managed_subscription_sync_complete_with_lease(&plugin_id, lease, call)?;
-                return crate::services::subscription::complete_managed_sync_authorized(
-                    app.clone(),
+                return crate::services::subscription::complete_managed_sync_authorized_state(
+                    &state,
+                    app.as_ref(),
                     input,
-                    || {
-                        lease
-                            .check(Some(&request))
-                            .map_err(super::sdk::invocation_failure)
-                    },
+                    authorize,
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
             }
-            if call.method == Method::SubscriptionRemove {
-                let (subscription_id, remove_associated_config, request) = state
+            if method == Method::SubscriptionRemove {
+                let (subscription_id, remove_associated_config, _) = state
                     .plugins()
                     .managed_subscription_removal_with_lease(lease, call)?;
                 return tauri::async_runtime::block_on(
-                    crate::services::subscription::remove_managed_authorized(
+                    crate::services::subscription::remove_managed_authorized_state(
+                        &state,
                         app.clone(),
                         subscription_id,
                         remove_associated_config,
                         plugin_id.clone(),
-                        || {
-                            lease
-                                .check(Some(&request))
-                                .map_err(super::sdk::invocation_failure)
-                        },
+                        authorize,
                     ),
                 )
                 .and_then(|outcome| serde_json::to_value(outcome).map_err(io::failure));
             }
-            let network_proxy = crate::configuration::preferences::endpoint(state.inner())
+            let network_proxy = crate::configuration::preferences::endpoint(&state)
                 .ok()
                 .map(|(host, port)| format!("http://{host}:{port}"));
             let value = state.plugins().sdk_call_with_lease(
@@ -129,15 +153,26 @@ fn sdk_dispatcher(
                 lease,
                 call,
                 network_proxy,
-                Some(state.inner()),
+                Some(&state),
             )?;
+            authorize()?;
             let value = if method == Method::BrowserOpen {
-                super::sdk::open_browser_with_lease(&app, lease, &request, value)?
+                // Admission above guarantees this is an interactive host.
+                super::sdk::open_browser_with_lease(
+                    app.as_ref().ok_or_else(interactive_unavailable)?,
+                    lease,
+                    &request,
+                    value,
+                )?
             } else {
                 value
             };
             super::notification::deliver_if_post(method, value, |value| {
-                super::notification::publish(&app, value)
+                authorize()?;
+                super::notification::publish(
+                    app.as_ref().ok_or_else(interactive_unavailable)?,
+                    value,
+                )
             })
         })();
         if result.is_err()
@@ -152,13 +187,12 @@ fn sdk_dispatcher(
                 )
             )
         {
-            let state = app.state::<crate::state::app_state::AppState>();
             let action = observed_method.map_or(
                 crate::models::logs::PluginAction::ComponentAction,
                 crate::services::logs::plugin_sdk_action,
             );
             crate::services::logs::plugin_host_event(
-                state.inner(),
+                &state,
                 &plugin_id,
                 &component_id,
                 action,
@@ -178,6 +212,38 @@ fn sdk_dispatcher(
         serde_json::to_string(&reply)
             .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput)
     })
+}
+
+fn check_execution_context(
+    state: &crate::state::app_state::AppState,
+    cancelled: &AtomicBool,
+) -> AppResult<()> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err(AppError {
+            code: "plugin_host_suspended",
+            message: "原生系统任务已停止；在途请求仍可能排空，结果不能交付".into(),
+            details: None,
+        });
+    }
+    state.plugins().platform.require_foreground()
+}
+
+fn interactive_unavailable() -> AppError {
+    super::platform::unavailable("本次系统后台任务没有前台交互上下文，请返回应用执行交互操作")
+}
+
+fn require_interactive_delivery(method: Method, interactive: bool) -> AppResult<()> {
+    if !interactive && method == Method::BrowserOpen {
+        return Err(interactive_unavailable());
+    }
+    if !interactive && method == Method::NotificationPost {
+        return Err(AppError {
+            code: "plugin_system_notification_unavailable",
+            message: "本次系统后台任务尚无独立原生通知适配；没有提交系统通知".into(),
+            details: None,
+        });
+    }
+    Ok(())
 }
 
 impl Host {
@@ -672,13 +738,38 @@ impl Host {
         app: tauri::AppHandle,
         due: &super::scheduler::DueTask,
     ) -> AppResult<serde_json::Value> {
+        let state = app
+            .state::<crate::state::app_state::AppState>()
+            .inner()
+            .clone();
+        self.invoke_scheduled_with_context(
+            state,
+            Some(app),
+            due,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+    }
+
+    /// Run the actual reviewed VM from a service-owned native execution window.
+    /// AppState shares its owner with a later UI; no AppHandle or WebView is
+    /// required for SDK IO, durable task state or managed subscription updates.
+    pub(super) fn invoke_scheduled_with_context(
+        &self,
+        state: crate::state::app_state::AppState,
+        app: Option<tauri::AppHandle>,
+        due: &super::scheduler::DueTask,
+        cancelled: Arc<AtomicBool>,
+        admission: Option<super::platform::BackgroundPermit>,
+    ) -> AppResult<serde_json::Value> {
         let plugin_id = due.task.plugin_id.as_str();
         let component_id = due.task.component_id.as_str();
-        let _activity = self.activity_checked(
-            app.state::<crate::state::app_state::AppState>()
-                .capabilities(),
-            plugin_id,
-        )?;
+        let _admission = admission
+            .as_ref()
+            .map(|permit| permit.enter())
+            .transpose()?;
+        check_execution_context(&state, &cancelled)?;
+        let _activity = self.activity_checked(state.capabilities(), plugin_id)?;
 
         let (
             component,
@@ -691,10 +782,10 @@ impl Host {
             target,
         ) = {
             let _operation = self.operation_guard()?;
-            let manager = app.state::<crate::state::app_state::AppState>();
-            self.checked_rescan(manager.capabilities())?;
+            let manager = state.capabilities();
+            self.checked_rescan(manager)?;
             let key = format!("{plugin_id}/{component_id}");
-            let binding = self.checked_scheduled_due(manager.capabilities(), due)?;
+            let binding = self.checked_scheduled_due(manager, due)?;
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(&key).ok_or_else(stale)?;
             let mut configuration = loaded
@@ -715,11 +806,18 @@ impl Host {
                 self.platform.target()?,
             );
             drop(state);
-            self.mark_scheduled_dispatch(manager.capabilities(), due, now_unix_ms())?;
+            self.mark_scheduled_dispatch(manager, due, now_unix_ms())?;
             prepared
         };
         let digest = component.digest().to_owned();
-        let dispatcher = sdk_dispatcher(app.clone(), plugin_id, component_id);
+        let dispatcher = sdk_dispatcher_with_context(
+            state.clone(),
+            app,
+            plugin_id,
+            component_id,
+            cancelled.clone(),
+            admission,
+        );
         let receipt = executor
             .execute_reviewed(
                 &component,
@@ -737,7 +835,7 @@ impl Host {
                     target,
                     registration: binding.registration,
                     revision: binding.revision,
-                    cancelled: Arc::new(AtomicBool::new(false)),
+                    cancelled: cancelled.clone(),
                     host_version: env!("CARGO_PKG_VERSION").into(),
                     dispatcher: Some(dispatcher),
                     scheduled: true,
@@ -755,18 +853,15 @@ impl Host {
         }
         let _operation = self.operation_guard()?;
         receipt.check().map_err(super::sdk::invocation_failure)?;
-        self.checked_scheduled_due(
-            app.state::<crate::state::app_state::AppState>()
-                .capabilities(),
-            due,
-        )?;
+        check_execution_context(&state, &cancelled)?;
+        self.checked_scheduled_due(state.capabilities(), due)?;
         let key = format!("{plugin_id}/{component_id}");
-        let state = self.state.lock().unwrap();
-        let loaded = state.loaded.get(&key).ok_or_else(stale)?;
+        let loaded_state = self.state.lock().unwrap();
+        let loaded = loaded_state.loaded.get(&key).ok_or_else(stale)?;
         if loaded.component.digest() != digest || !loaded.consent.enabled {
             return Err(stale());
         }
-        drop(state);
+        drop(loaded_state);
         namespace::apply_runtime_updates_checked(
             &self.root()?,
             &publisher,
@@ -774,11 +869,8 @@ impl Host {
             envelope.state_updates,
             &|| {
                 receipt.check().map_err(super::sdk::invocation_failure)?;
-                self.checked_scheduled_due(
-                    app.state::<crate::state::app_state::AppState>()
-                        .capabilities(),
-                    due,
-                )?;
+                check_execution_context(&state, &cancelled)?;
+                self.checked_scheduled_due(state.capabilities(), due)?;
                 Ok(())
             },
         )?;
@@ -1293,5 +1385,195 @@ impl Host {
             });
         }
         Ok(self.snapshot(manager))
+    }
+}
+
+#[cfg(test)]
+mod headless_tests {
+    use super::*;
+    use crate::state::app_state::AppState;
+
+    fn fixture(
+        source: &str,
+    ) -> (
+        tempfile::TempDir,
+        AppState,
+        super::super::scheduler::DueTask,
+    ) {
+        let (root, host, manager) = super::super::tests::setup_component(
+            source,
+            serde_json::json!({"capability":"tasks.schedule","scope":"self"}),
+        );
+        let row = host.snapshot(&manager).components.remove(0);
+        host.authorize(
+            &manager,
+            row.review.unwrap(),
+            vec![Request {
+                capability: Capability::TasksSchedule,
+                scope: "self".into(),
+            }],
+        )
+        .unwrap();
+        host.schedule_put(
+            "org.example.plugin",
+            "identity",
+            "refresh".into(),
+            "refresh".into(),
+            300,
+        )
+        .unwrap();
+        let due = host.take_due(&manager, u64::MAX).unwrap().remove(0);
+        let state = AppState::with_plugin_fixture(host, manager);
+        (root, state, due)
+    }
+
+    fn task_journal(state: &AppState) -> serde_json::Value {
+        serde_json::to_value(
+            state
+                .plugins()
+                .schedule_list("org.example.plugin", "identity")
+                .unwrap()
+                .remove(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn service_context_runs_real_scheduled_vm_and_sdk_without_an_app_handle() {
+        let call = serde_json::json!({
+            "version":1,
+            "method":"schedule_list",
+            "request":{"capability":"tasks.schedule","scope":"self"},
+            "budget":{"timeout_ms":1000,"max_result_bytes":32768},
+            "arguments":{}
+        });
+        let wire = serde_json::to_string(&call).unwrap();
+        let source = format!(
+            "const observed=JSON.parse(hostSdkCall({})); ({{znet_plugin_result:1,state_updates:{{'scheduled/value':'b2s='}},value:{{observed,invocation:pluginInput.invocation}}}})",
+            serde_json::to_string(&wire).unwrap(),
+        );
+        let (_root, state, due) = fixture(&source);
+        let result = state
+            .plugins()
+            .invoke_scheduled_with_context(
+                state.clone(),
+                None,
+                &due,
+                Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .unwrap();
+        assert_eq!(result["observed"]["ok"], true);
+        assert_eq!(result["observed"]["value"][0]["taskId"], "refresh");
+        assert_eq!(
+            result["observed"]["value"][0]["lastAttempt"]["state"],
+            "running"
+        );
+        assert_eq!(
+            result["invocation"]["action"],
+            "lifecycle.scheduled.refresh"
+        );
+        assert_eq!(
+            result["invocation"]["payload"]["attemptId"],
+            due.attempt_id().unwrap()
+        );
+        assert_eq!(
+            state
+                .plugins()
+                .storage_get(
+                    "org.example.plugin",
+                    namespace::Area::State,
+                    "scheduled/value"
+                )
+                .unwrap(),
+            Some("b2s=".into())
+        );
+        // A clone used by a later UI sees the same host publication and journal.
+        assert_eq!(
+            task_journal(&state.clone())["lastAttempt"]["state"],
+            "running"
+        );
+    }
+
+    #[test]
+    fn pre_cancelled_service_run_never_crosses_dispatch_marker_or_publishes_guest_state() {
+        let (_root, state, due) =
+            fixture("({znet_plugin_result:1,state_updates:{'scheduled/value':'b2s='},value:true})");
+        let before = task_journal(&state);
+        let error = state
+            .plugins()
+            .invoke_scheduled_with_context(
+                state.clone(),
+                None,
+                &due,
+                Arc::new(AtomicBool::new(true)),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "plugin_host_suspended");
+        assert_eq!(task_journal(&state), before);
+        assert_eq!(
+            state
+                .plugins()
+                .storage_get(
+                    "org.example.plugin",
+                    namespace::Area::State,
+                    "scheduled/value"
+                )
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn headless_vm_failure_preserves_dispatch_fact_without_claiming_guest_publication() {
+        let (_root, state, due) = fixture("throw new Error('untrusted-sensitive-canary')");
+        let error = state
+            .plugins()
+            .invoke_scheduled_with_context(
+                state.clone(),
+                None,
+                &due,
+                Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .unwrap_err();
+        assert!(!serde_json::to_string(&error)
+            .unwrap()
+            .contains("sensitive-canary"));
+        assert_eq!(task_journal(&state)["lastAttempt"]["state"], "running");
+        assert!(task_journal(&state)["lastAttempt"]["dispatchAtUnixMs"].is_string());
+        assert_eq!(
+            state
+                .plugins()
+                .storage_get(
+                    "org.example.plugin",
+                    namespace::Area::State,
+                    "scheduled/value"
+                )
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn background_interactive_delivery_returns_failure_without_fake_system_acceptance() {
+        for method in [Method::BrowserOpen, Method::NotificationPost] {
+            let error = require_interactive_delivery(method, false).unwrap_err();
+            assert!(matches!(
+                error.code,
+                "plugin_platform_unavailable" | "plugin_system_notification_unavailable"
+            ));
+            assert!(!serde_json::to_string(&error).unwrap().contains("accepted"));
+            assert!(require_interactive_delivery(method, true).is_ok());
+        }
+        for method in [
+            Method::ConfiguredRequest,
+            Method::StoragePut,
+            Method::SubscriptionApply,
+            Method::SchedulePut,
+        ] {
+            assert!(require_interactive_delivery(method, false).is_ok());
+        }
     }
 }

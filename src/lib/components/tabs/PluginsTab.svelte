@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PluginJobStatus from './PluginJobStatus.svelte';
   import PluginUninstall from './PluginUninstall.svelte';
   import PluginCatalog from './PluginCatalog.svelte';
   import PluginPageFrame from './PluginPageFrame.svelte';
@@ -525,6 +526,7 @@
       {#if snapshot.platform.state === 'unavailable'}<Button variant="outline" onclick={async () => { try { snapshot = await pluginApi.recheckHost(); } catch (cause) { error = getAppErrorInfo(cause, '宿主重新核对未确认').message; } }}>重新核对宿主</Button>{/if}
     </div>
   {/if}
+  {#if snapshot.platform?.taskScheduling?.mode === 'android-job-scheduler'}<PluginJobStatus />{/if}
   {#if selectedPlugin}
     <div class="plugins-detail-header"><Button variant="ghost" size="sm" onclick={closeDetails}><ArrowLeft size={15} />返回已安装插件</Button><span title={selectedPlugin.name}>{selectedPlugin.name}</span></div>
   {:else}

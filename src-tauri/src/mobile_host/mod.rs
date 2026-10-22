@@ -1,5 +1,7 @@
 //! Mobile host boundary. The UI consumes facts; native service/provider owns VPN.
 //! Until the complete Proxy/external-TUN bridge exists, deny desktop fallbacks.
+#[cfg(target_os = "android")]
+pub(crate) mod android_jobs;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) mod application;
 

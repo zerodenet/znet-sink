@@ -1,7 +1,6 @@
-# 移动插件前台任务与结果恢复
+# 移动插件任务与结果恢复
 
-本批复用共享 `plugins/scheduler`，接入原生 profile 核对后的前台 owner。不是 VPN 服务，
-不持有 TUN，也不交付系统后台调度。iOS Release 的外部插件执行限制保持不变。
+2026-10-22：Android 新增[真实系统后台调度](android-plugin-background-v0.0.3.md)，由 JobService 冷启动同一 Rust 服务与插件队列；后台运行与设备验收分别记录。iOS 保留原前台限制并暂停专项。两者都不拥有 VPN、TUN 或内核运行。
 
 ## 执行与暂停
 
@@ -12,8 +11,7 @@
 
 `tasks.schedule` 在可执行的移动前台宿主中允许保存 5 分钟至 7 天的周期意图。每30秒的
 宿主前台检查只是最早发起机会，长任务、暂停和系统终止均可推迟；`nextRunUnixMs` 不承诺
-实际执行时间。后台不运行这条前台轮询。平台状态与页面明确显示 `foreground-only` 及
-“后台执行尚未适配”；不会注册一个空 OS Worker 来冒充后台能力。
+实际执行时间。后台不运行这条前台轮询。Android 使用独立 OS JobScheduler 作业与真实无界面 VM 链（最短 15 分钟系统周期），显示原生登记/最近执行与停止/未知记录；iOS 继续明确 `foreground-only` 和后台未适配。
 
 每次保存生成新的意图 revision。排队固定原审阅、安装 generation、原生代次和本次
 attempt ID；dispatch、状态写入和最终回写均核对原对象。单组件 busy、VM/SDK 预算、
@@ -55,4 +53,4 @@ scheduled invocation 的 payload 增加只读 `attemptId`，与 `taskId` 一起�
 实际平台、工具链与逐提交结果记录于[验证账本](../verification/mobile-client-v0.0.3.md)。
 API24完整 Rust host check 不证明 Android Rust/JNI/guest 全链；iOS完整App/VM/前后台
 检查不自动计为任务执行验收。Galaxy S8、iPhone、锁屏、低内存、OS后台唤醒、系统调度
-恢复及完整任务管理页仍须分别实施/验收；不能称完整 A19/A21 已完成。
+恢复及完整任务管理页仍须分别验收（iOS 专项暂停）；不能称完整 A19/A21 已完成。
