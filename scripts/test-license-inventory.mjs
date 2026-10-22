@@ -49,6 +49,12 @@ try {
   const debug={...android,target:{...android.target,profile:'debug'}};
   assert.equal(mergeInventories(android,android,frontend).target.profile,'release');
   assert.equal(mergeInventories(debug,debug,frontend,[],'debug').target.profile,'debug');
+  const x86={...debug,target:{...debug.target,triple:'i686-linux-android'}};
+  assert.equal(mergeInventories(x86,x86,frontend,[],'debug').target.triple,'i686-linux-android');
+  assert.throws(()=>mergeInventories(debug,x86,frontend,[],'debug'),/target\/profile/);
+  assert.throws(()=>mergeInventories(x86,debug,frontend,[],'debug'),/target\/profile/);
+  const x86Release={...x86,target:{...x86.target,profile:'release'}};
+  assert.throws(()=>mergeInventories(x86Release,x86Release,frontend),/target\/profile/,'x86 Release is not adapted');
   assert.throws(()=>mergeInventories(debug,debug,frontend),/target\/profile/,'default Release must reject Debug');
   for(const [gradle,cargo,profile] of [
     [android,debug,'debug'],[debug,android,'debug'],[debug,debug,'release'],
@@ -65,6 +71,16 @@ try {
   const packaged={...android,target:{...android.target,triple:'aarch64-linux-android'},provenance:{kind:'fixture',inputs:[{label:'frontend-inventory',sha256:sha256(JSON.stringify(inventory))}]},gaps:[]};
   execFileSync('python3',['-c',"import zipfile,sys; a=zipfile.ZipFile(sys.argv[1],'w'); a.writestr('assets/license-inventory.native.json',sys.argv[2]); a.writestr('lib/arm64-v8a/libgui_lib.so',b'synthetic test payload'); a.close()",apk,JSON.stringify(packaged)]);
   assert.equal(apkLicenseReceipt(apk,frontendPath).receipt.nativePayloads.length,1);
+  const x86Packaged={...packaged,target:{...x86.target}};
+  const packX86=(value,path='lib/x86/libgui_lib.so',extra=false)=>execFileSync('python3',['-c',"import zipfile,sys; a=zipfile.ZipFile(sys.argv[1],'w'); a.writestr('assets/license-inventory.native.json',sys.argv[2]); a.writestr(sys.argv[3],b'synthetic test payload'); a.writestr('lib/arm64-v8a/extra.so',b'synthetic') if sys.argv[4]=='true' else None; a.close()",apk,JSON.stringify(value),path,String(extra)]);
+  packX86(x86Packaged);
+  assert.equal(apkLicenseReceipt(apk,frontendPath,null,'debug').inventory.target.triple,'i686-linux-android');
+  assert.throws(()=>apkLicenseReceipt(apk,frontendPath),/target\/profile/,'x86 Debug is not Release');
+  packX86(x86Packaged,'lib/arm64-v8a/libgui_lib.so');
+  assert.throws(()=>apkLicenseReceipt(apk,frontendPath,null,'debug'),/payload|ABI/);
+  packX86(x86Packaged,'lib/x86/libgui_lib.so',true);
+  assert.throws(()=>apkLicenseReceipt(apk,frontendPath,null,'debug'),/payload|ABI/);
+  execFileSync('python3',['-c',"import zipfile,sys; a=zipfile.ZipFile(sys.argv[1],'w'); a.writestr('assets/license-inventory.native.json',sys.argv[2]); a.writestr('lib/arm64-v8a/libgui_lib.so',b'synthetic test payload'); a.close()",apk,JSON.stringify(packaged)]);
   writeFileSync(frontendPath,JSON.stringify({...inventory,provenance:{kind:'stale'}}));
   assert.throws(()=>apkLicenseReceipt(apk,frontendPath),/stale frontend/);
 

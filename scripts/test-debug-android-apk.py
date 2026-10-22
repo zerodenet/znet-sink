@@ -20,10 +20,11 @@ BADGING = "\n".join(["package: name='org.zerodenet.znetsink.debug' versionCode='
 MANIFEST = "\n".join(["N: android=http://schemas.android.com/apk/res/android", "E: manifest (line=1)", "  E: application (line=5)", "    A: android:debuggable(0x0101000f)=(type 0x12)0xffffffff", "    E: activity (line=6)"])
 
 
-def native():
-    header = bytearray(64)
-    header[:6] = b"\x7fELF\x02\x01"
-    struct.pack_into("<HH", header, 16, 3, 183)
+def native(abi="arm64-v8a"):
+    target = VERIFIER.target_for_abi(abi)
+    header = bytearray(target["elfHeaderBytes"])
+    header[:6] = b"\x7fELF" + bytes([target["elfClass"], 1])
+    struct.pack_into("<HH", header, 16, 3, target["elfMachine"])
     return bytes(header) + b"/index.html\x00/_app/immutable/entry/app.hash.js\x00/_app/immutable/entry/start.hash.js\x00/_app/immutable/nodes/0.hash.js\x00/_app/immutable/nodes/2.hash.js"
 
 
@@ -85,6 +86,62 @@ class DebugApkTests(unittest.TestCase):
         self.assertEqual(result["namespace"], "org.zerodenet.znetsink")
         self.assertEqual(result["activity"], "org.zerodenet.znetsink.MainActivity")
         self.assertNotEqual(result["androidApplicationId"], result["tauriIdentifier"])
+
+    def x86_fixture(self):
+        del self.entries["lib/arm64-v8a/libgui_lib.so"]
+        self.entries["lib/x86/libgui_lib.so"] = native("x86")
+        self.tool_outputs["badging"] = BADGING.replace("'arm64-v8a'", "'x86'")
+        self.write_tools()
+        self.write_zip()
+
+    def test_x86_requires_explicit_expected_abi_and_preserves_debug_identity_checks(self):
+        self.x86_fixture()
+        self.denied()  # Default arm64 must never silently follow APK claims.
+        result = VERIFIER.verify_debug(self.apk, self.tools, SHA, self.receipt, "x86")
+        self.assertEqual(result["abi"], "x86")
+        self.assertEqual(result["targetTriple"], "i686-linux-android")
+        self.assertEqual(result["package"]["abis"], ["x86"])
+        self.assertEqual(result["package"]["minimumSdk"], 24)
+        self.assertFalse(result["frontend"]["executionVerified"])
+
+    def test_x86_path_cannot_hide_wrong_elf_class_machine_type_or_truncation(self):
+        self.x86_fixture()
+        valid = native("x86")
+        wrong_machine = bytearray(valid)
+        struct.pack_into("<H", wrong_machine, 18, 183)
+        wrong_type = bytearray(valid)
+        struct.pack_into("<H", wrong_type, 16, 2)
+        for value in [native(), bytes(wrong_machine), bytes(wrong_type), valid[:51],
+                      valid[:5] + b"\x02" + valid[6:]]:
+            self.entries["lib/x86/libgui_lib.so"] = value
+            self.write_zip()
+            with self.assertRaises(ValueError):
+                VERIFIER.verify_debug(self.apk, self.tools, SHA, self.receipt, "x86")
+            self.assertFalse(self.receipt.exists())
+
+    def test_x86_badging_and_every_native_library_must_match_the_expected_abi(self):
+        self.x86_fixture()
+        self.tool_outputs["badging"] = BADGING
+        self.write_tools()
+        with self.assertRaises(ValueError):
+            VERIFIER.verify_debug(self.apk, self.tools, SHA, self.receipt, "x86")
+        self.tool_outputs["badging"] = BADGING.replace("'arm64-v8a'", "'x86'")
+        self.write_tools()
+        self.entries["lib/x86/another.so"] = native()
+        self.write_zip()
+        with self.assertRaises(ValueError):
+            VERIFIER.verify_debug(self.apk, self.tools, SHA, self.receipt, "x86")
+        self.entries["lib/x86/another.so"] = native("x86")
+        self.entries["lib/arm64-v8a/another.so"] = native()
+        self.write_zip()
+        with self.assertRaises(ValueError):
+            VERIFIER.verify_debug(self.apk, self.tools, SHA, self.receipt, "x86")
+        self.assertFalse(self.receipt.exists())
+
+    def test_unadapted_expected_abi_is_rejected(self):
+        for abi in ["x86_64", "armeabi-v7a", "", "../x86"]:
+            with self.assertRaises(ValueError):
+                VERIFIER.verify_debug(self.apk, self.tools, SHA, self.receipt, abi)
 
     def test_unsigned_or_failed_signature_command_never_publishes_receipt(self):
         self.tool_outputs["exit"] = 1

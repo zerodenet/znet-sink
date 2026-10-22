@@ -1,7 +1,8 @@
 # Android Debug 安装与 USB 调试
 
 本指南对应 Draft PR #46 的开发宿主。Debug 可安装、可通过 Chrome 检查 WebView；
-它不含已接通的移动 VPN/内核运行服务。Android 最低 API24、arm64；Galaxy S8 的
+它不含已接通的移动 VPN/内核运行服务。Android 最低 API24，默认 arm64，另有 x86 Debug
+构建路径；Galaxy S8 的
 真实安装、键盘、返回、前后台和网络验收仍需设备执行。云端没有模拟器、AVD 或真机。
 
 ## 构建与产物
@@ -12,6 +13,22 @@
 ```sh
 bash scripts/build-android-debug.sh
 ```
+
+2026-10-22 增加 Intel Mac 现有 32 位 x86 AVD 所需的开发包路径。使用同一锁定依赖、
+SDK/NDK和实际签名/许可校验链，另需官方 Rust `i686-linux-android` 标准库：
+
+```sh
+ZNET_ANDROID_DEBUG_TARGET=i686 bash scripts/build-android-debug.sh
+```
+
+选择必须一致贯穿 Cargo triple、Gradle ABI、许可清单、APK badging、全部 native ELF
+及最终回执；x86 必须是 ELF32/Intel80386，arm64 仍检查 ELF64/AArch64。未知目标、
+混合 ABI、伪装目录、错配许可或 Debug/Release 都拒绝。x86 仅开放 Debug，不将它扩展为
+独立 Release 发行能力。两种构建复用证据目录名，重复构建前须归档旧目录，保留各自 APK、
+SHA256及源码身份，不可拿旧 arm64 成功结果代替 x86。
+
+API30 x86 模拟器的实际安装、启动、WebView、文件与生命周期结果须另行记录；本轮 Mac
+离线，云端构建不会启动或操作该模拟器。打包成功不计为 App、API24 或 Galaxy S8 验收。
 
 脚本拒绝复用已有证据目录；再次运行前先自行归档/移走上一目录，避免失败时混入旧成功收据。
 
@@ -93,6 +110,6 @@ VPN授权与真实转发、随包内核装配、运行态控制/采样、测速�
 许可目录仍有四项 Android 原始材料缺口，构建收据应如实保留。没有 iPhone VPN验收、
 正式签名或发布。每次设备检查另记 APK SHA、证书、设备/provider版本、步骤和实际结果。
 
-当前 develop 已到 `408327df53554c28d5efeda3ece65535cabf783c`，当前分支与它有真实冲突。
-本批未合并或重置工作树；工作分支 push 运行完整现有检查加 Debug 检查。其成功只证明
-精确 head，不证明与最新 develop 合并后的结果，也不表示 PR 已可合并。
+历史 `408327d` 冲突已由后续集成处理；2026-10-22 实施基线 `ebdb46f` 已包含实际 develop
+`d39ad27`。本次 x86 增量继续使用原 PR和工作分支，不合并或发布。常规 CI与显式手动移动
+构建的既定分界保持；每次结果只证明对应精确提交，以 PR 当前说明及实际构建回执为准。

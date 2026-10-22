@@ -3,13 +3,15 @@ import { dirname,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha256,serializeInventory,argumentsOf,verifyMaterialInputs } from './license-common.mjs';
 import {applyMaterialCache,applyPackageMaterialCache} from './license-materials.mjs';
+import {androidInventoryTarget} from './android-build-target.mjs';
 
 /** @param {any} gradle @param {any} cargo @param {any} frontend @param {any[]} compilerMessages @param {string} profile */
 export function mergeInventories(gradle,cargo,frontend,compilerMessages=[],profile='release') {
   for(const input of [gradle,cargo,frontend])if(input.schemaVersion!==1||!Array.isArray(input.entries)||!Array.isArray(input.texts))throw new Error('Invalid inventory schema');
   if(!['debug','release'].includes(profile)||gradle.target?.platform!=='android'||cargo.target?.platform!=='android'||
-    gradle.target.triple!=='aarch64-linux-android'||cargo.target.triple!==gradle.target.triple||
+    cargo.target.triple!==gradle.target.triple||
     gradle.target.profile!==profile||cargo.target.profile!==profile||frontend.target?.platform!=='frontend')throw new Error('Mismatched native inventory target/profile');
+  androidInventoryTarget(gradle.target.triple, profile);
   if(JSON.stringify([...cargo.target.features].sort())!==JSON.stringify([...frontend.target.features].sort()))throw new Error('Frontend/native inventory feature mismatch');
   const rows=[...cargo.entries,...frontend.entries,...gradle.entries].map(/** @param {any} entry */ entry=>structuredClone(entry));
   for(const message of compilerMessages) {

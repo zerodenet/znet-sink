@@ -21,6 +21,22 @@ abstract class ZnetNativeLicenseAssetTask extends DefaultTask {
 }
 
 class ZnetNativeLicenses {
+    static String targetForProject(project, String profile) {
+        String triple = project.findProperty('znetLicenseTarget') ?: 'aarch64-linux-android'
+        def abiByTriple = ['aarch64-linux-android':'arm64-v8a', 'i686-linux-android':'x86']
+        String abi = abiByTriple[triple]
+        if (!abi || (triple == 'i686-linux-android' && profile != 'debug')) {
+            throw new GradleException('Unsupported native license target/profile')
+        }
+        // This is the same property consumed by the generated RustPlugin's
+        // universal flavor. Never label a different/multi-ABI build as this target.
+        def selectedAbis = (project.findProperty('abiList') ?: 'arm64-v8a').toString().split(',').toList()
+        if (selectedAbis != [abi]) {
+            throw new GradleException('Native license target does not match the selected ABI')
+        }
+        triple
+    }
+
     static String profileForVariant(String variant) {
         if (variant == 'debug' || variant.endsWith('Debug')) return 'debug'
         if (variant == 'release' || variant.endsWith('Release')) return 'release'
@@ -56,6 +72,7 @@ class ZnetNativeLicenses {
     }
     static Map collect(project, configuration, String variant, List artifactCollections) {
         String profile = profileForVariant(variant)
+        String targetTriple = targetForProject(project, profile)
         def entries = []
         def texts = new TreeMap<String, Map>()
         def gaps = []
@@ -250,7 +267,7 @@ class ZnetNativeLicenses {
             entry.missing.each { gaps.add([ecosystem:entry.ecosystem, id:id, reason:it]) }
             entries.add(entry)
         }
-        [schemaVersion:1, target:[platform:'android', triple:'aarch64-linux-android', profile:profile, features:[]],
+        [schemaVersion:1, target:[platform:'android', triple:targetTriple, profile:profile, features:[]],
             provenance:[kind:"gradle-resolved-${profile}-runtime", inputs:inputs.unique().sort { it.label }],
             entries:entries.sort { it.id }, texts:texts.values().toList(), gaps:gaps.sort { "${it.ecosystem}:${it.id}:${it.reason}" }]
     }

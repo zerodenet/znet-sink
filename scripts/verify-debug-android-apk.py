@@ -29,6 +29,14 @@ ENTRY_POINTS = (
     b"Lorg/zerodenet/znetsink/nativeio/ShareSelectionReceiver;",
 )
 MAX_APK = 1024 * 1024 * 1024
+TARGETS = json.loads(pathlib.Path(__file__).with_name("android-build-targets.json").read_text())
+
+
+def target_for_abi(expected_abi):
+    matches = [target for target in TARGETS.values() if target["abi"] == expected_abi]
+    if len(matches) != 1:
+        raise ValueError("Unsupported expected Android ABI")
+    return matches[0]
 
 
 def digest(path):
@@ -83,7 +91,8 @@ def verify_signature(output):
             "schemes": {name: value == "true" for name, value in schemes}}
 
 
-def verify_badging(output):
+def verify_badging(output, expected_abi="arm64-v8a"):
+    target_for_abi(expected_abi)
     def exactly(pattern, expected, description):
         if re.findall(pattern, output, re.M) != [expected]:
             raise ValueError("Unexpected " + description)
@@ -92,10 +101,10 @@ def verify_badging(output):
     exactly(r"^targetSdkVersion:'([^']+)'\s*$", "36", "target API")
     exactly(r"^launchable-activity: name='([^']+)'[^\r\n]*$", ACTIVITY, "launchable activity")
     native = re.findall(r"^native-code:\s*(.*?)\s*$", output, re.M)
-    if native != ["'arm64-v8a'"]:
-        raise ValueError("Badging must declare only arm64-v8a")
+    if native != [f"'{expected_abi}'"]:
+        raise ValueError("Badging must declare only the expected ABI")
     return {"applicationId": APP_ID, "minimumSdk": 24, "targetSdk": 36,
-            "launchableActivity": ACTIVITY, "abis": ["arm64-v8a"]}
+            "launchableActivity": ACTIVITY, "abis": [expected_abi]}
 
 
 def verify_debuggable(output):
@@ -123,7 +132,9 @@ def verify_debuggable(output):
     return True
 
 
-def verify_contents(apk):
+def verify_contents(apk, expected_abi="arm64-v8a"):
+    target = target_for_abi(expected_abi)
+    host_library = f"lib/{expected_abi}/libgui_lib.so"
     with zipfile.ZipFile(apk) as archive:
         entries = archive.infolist()
         names = [entry.filename for entry in entries]
@@ -137,22 +148,26 @@ def verify_contents(apk):
                 raise ValueError("Unsafe APK ZIP entry")
         if sum(entry.file_size for entry in entries) > MAX_APK:
             raise ValueError("Expanded APK exceeds budget")
-        required = {"AndroidManifest.xml", "classes.dex", "lib/arm64-v8a/libgui_lib.so", "assets/tauri.conf.json"}
+        required = {"AndroidManifest.xml", "classes.dex", host_library, "assets/tauri.conf.json"}
         if not required.issubset(names) or archive.testzip() is not None:
             raise ValueError("Incomplete or corrupt APK ZIP")
         libraries = [name for name in names if name.startswith("lib/") and name.endswith(".so")]
-        if not libraries or any(name.split("/")[1] != "arm64-v8a" for name in libraries):
-            raise ValueError("APK must contain only arm64 native libraries")
+        if not libraries or any(name.split("/")[1] != expected_abi for name in libraries):
+            raise ValueError("APK must contain only the expected native ABI")
+        for library in libraries:
+            with archive.open(library) as handle:
+                header = handle.read(64)
+            if (len(header) < target["elfHeaderBytes"]
+                    or header[:6] != b"\x7fELF" + bytes([target["elfClass"], 1])
+                    or struct.unpack_from("<HH", header, 16) != (3, target["elfMachine"])):
+                raise ValueError("Native payload ELF class or machine mismatches the expected ABI")
         dex_names = [name for name in names if re.fullmatch(r"classes(?:[2-9]|[1-9]\d+)?\.dex", name)]
         if sum(archive.getinfo(name).file_size for name in dex_names) > 256 * 1024 * 1024:
             raise ValueError("APK DEX contents exceed budget")
         dex = b"".join(archive.read(name) for name in dex_names)
         if not all(entry in dex for entry in ENTRY_POINTS):
             raise ValueError("APK lacks MainActivity or native document entry points")
-        native = archive.read("lib/arm64-v8a/libgui_lib.so")
-        if (len(native) < 64 or native[:6] != b"\x7fELF\x02\x01"
-                or struct.unpack_from("<HH", native, 16) != (3, 183)):
-            raise ValueError("Application host is not an arm64 ELF shared library")
+        native = archive.read(host_library)
         try:
             config = json.loads(archive.read("assets/tauri.conf.json"))
         except (ValueError, UnicodeError) as error:
@@ -177,7 +192,7 @@ def verify_contents(apk):
             if not found:
                 raise ValueError("Bundled production frontend asset keys are missing")
             keys.append(found[0].decode("ascii"))
-        return {"abi": "arm64-v8a", "nativeLibrarySha256": hashlib.sha256(native).hexdigest(),
+        return {"abi": expected_abi, "targetTriple": target["triple"], "nativeLibrarySha256": hashlib.sha256(native).hexdigest(),
                 "nativeDocumentsPackaged": True, "nativeEntryPoints": [entry.decode("ascii") for entry in ENTRY_POINTS],
                 "frontend": {"storage": "tauri-native-embedded-assets", "index": "/index.html",
                              "observedEmbeddedAssetKeys": keys, "evidence": "packaged-asset-keys-only",
@@ -185,17 +200,17 @@ def verify_contents(apk):
                              "executionVerified": False}, "zipIntegrity": "all-entry-crc-verified"}
 
 
-def verify_debug(apk, build_tools, expected_commit, receipt):
+def verify_debug(apk, build_tools, expected_commit, receipt, expected_abi="arm64-v8a"):
     if not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
         raise ValueError("Expected commit must be a full lowercase Git SHA")
     if receipt.resolve() == apk.resolve():
         raise ValueError("Receipt cannot overwrite the APK")
     before = identity(apk)
     apk_sha = digest(apk)
-    contents = verify_contents(apk)
+    contents = verify_contents(apk, expected_abi)
     signature = verify_signature(run_tool([build_tools / "apksigner", "verify", "--verbose", "--print-certs", "--min-sdk-version", "24", apk]))
     badging = run_tool([build_tools / "aapt", "dump", "badging", apk])
-    package = verify_badging(badging)
+    package = verify_badging(badging, expected_abi)
     manifest = run_tool([build_tools / "aapt", "dump", "xmltree", apk, "AndroidManifest.xml"])
     verify_debuggable(manifest)
     if identity(apk) != before or digest(apk) != apk_sha:
@@ -231,10 +246,11 @@ def main():
     parser.add_argument("apk", type=pathlib.Path)
     parser.add_argument("--build-tools", type=pathlib.Path, required=True)
     parser.add_argument("--expected-commit", required=True)
+    parser.add_argument("--expected-abi", choices=[target["abi"] for target in TARGETS.values()], default="arm64-v8a")
     parser.add_argument("--receipt", type=pathlib.Path, required=True)
     args = parser.parse_args()
     try:
-        result = verify_debug(args.apk, args.build_tools, args.expected_commit, args.receipt)
+        result = verify_debug(args.apk, args.build_tools, args.expected_commit, args.receipt, args.expected_abi)
     except (ValueError, OSError, zipfile.BadZipFile, RuntimeError) as error:
         print(str(error), file=sys.stderr)
         return 1

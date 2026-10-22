@@ -12,4 +12,8 @@ export PATH="$znet_ndk_bin:$PATH"
 export CC_aarch64_linux_android="$znet_ndk_bin/aarch64-linux-android24-clang"
 export CXX_aarch64_linux_android="$znet_ndk_bin/aarch64-linux-android24-clang++"
 export AR_aarch64_linux_android="$znet_ndk_bin/llvm-ar"
+test -x "$znet_ndk_bin/i686-linux-android24-clang" || return 1
+export CC_i686_linux_android="$znet_ndk_bin/i686-linux-android24-clang"
+export CXX_i686_linux_android="$znet_ndk_bin/i686-linux-android24-clang++"
+export AR_i686_linux_android="$znet_ndk_bin/llvm-ar"
 unset znet_ndk_host znet_ndk_bin
