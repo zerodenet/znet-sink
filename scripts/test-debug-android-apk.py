@@ -26,6 +26,7 @@ MANIFEST = "\n".join([
     "N: android=http://schemas.android.com/apk/res/android", "E: manifest (line=1)",
     '  A: package="org.zerodenet.znetsink.debug"',
     '  E: uses-permission (line=2)', '    A: android:name(0x01010003)="android.permission.INTERNET"',
+    '  E: uses-permission (line=3)', '    A: android:name(0x01010003)="android.permission.ACCESS_NETWORK_STATE"',
     '  E: uses-permission (line=3)', '    A: android:name(0x01010003)="android.permission.RECEIVE_BOOT_COMPLETED"',
     '  E: uses-permission (line=4)', '    A: android:name(0x01010003)="android.permission.REQUEST_INSTALL_PACKAGES"',
     "  E: application (line=5)", "    A: android:debuggable(0x0101000f)=(type 0x12)0xffffffff",
@@ -416,6 +417,15 @@ class DebugApkTests(unittest.TestCase):
             with self.subTest(manifest=value[-180:]):
                 with self.assertRaises(ValueError):
                     VERIFIER.verify_platform_manifest(value)
+
+    def test_network_constrained_jobs_require_unbounded_normal_network_state_permission(self):
+        declaration = '  E: uses-permission (line=3)\n    A: android:name(0x01010003)="android.permission.ACCESS_NETWORK_STATE"'
+        for invalid in (
+            MANIFEST.replace(declaration + '\n', ''),
+            MANIFEST.replace(declaration, declaration + '\n    A: android:maxSdkVersion(0x01010271)=(type 0x10)0x21'),
+        ):
+            with self.assertRaises(ValueError):
+                VERIFIER.verify_platform_manifest(invalid)
 
     def test_platform_manifest_permissions_are_scoped_to_root_and_cannot_expand(self):
         for value in (

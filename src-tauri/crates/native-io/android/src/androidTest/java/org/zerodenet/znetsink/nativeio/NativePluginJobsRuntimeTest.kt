@@ -22,6 +22,8 @@ class NativePluginJobsRuntimeTest {
         check(context.packageName.startsWith("org.zerodenet.znetsink.nativeio") && context.packageName.endsWith(".test"))
         check(context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0)
         check(Build.VERSION.SDK_INT >= 24)
+        assertEquals(android.content.pm.PackageManager.PERMISSION_GRANTED,
+            context.checkSelfPermission(android.Manifest.permission.ACCESS_NETWORK_STATE))
         val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
         val directory = File(context.noBackupFilesDir, "znet-plugin-jobs-v1")
         // Fail on an unowned/reused fixture instead of deleting its state or pending job.

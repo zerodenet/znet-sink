@@ -4,7 +4,7 @@
 
 ## 系统持有执行
 
-`NativePluginJobService` 由 Android JobScheduler 唤醒，同一应用进程，无 Activity、WebView 或网页定时器依赖。服务只接受系统的 `BIND_JOB_SERVICE` 调度。一个持久周期作业合并检查已有插件任务，不另建业务队列。`RECEIVE_BOOT_COMPLETED` 仅满足系统持久调度要求，不申请精确闹钟、常驻前台服务或电池豁免。
+`NativePluginJobService` 由 Android JobScheduler 唤醒，同一应用进程，无 Activity、WebView 或网页定时器依赖。服务只接受系统的 `BIND_JOB_SERVICE` 调度。一个持久周期作业合并检查已有插件任务，不另建业务队列。`ACCESS_NETWORK_STATE` 是 target API34+ 使用网络约束作业所必需的普通权限，不触发运行时授权或修改系统开关；`RECEIVE_BOOT_COMPLETED` 仅满足系统持久调度要求，不申请精确闹钟、常驻前台服务或电池豁免。
 
 已有任务意图仍为 5 分钟至 7 天。后台最小系统周期为 15 分钟，需要可用网络，Doze、锁屏、省电、配额、OEM 和网络约束可进一步推迟；不承诺准点。系统强行停止应用后，需用户重新打开，再核对登记与记录。原生 `ensure` 不重复改写已匹配的系统作业，避免每次恢复前台都把周期窗口向后推。系统登记失败与作业标识冲突明确显示，不能只因代码编译就宣称已登记。
 
@@ -35,3 +35,5 @@ JNI 冷入口从真实 Android Context 读取包名、私有数据目录和设�
 尚需 Android 设备覆盖：完整 App 冷启动 JNI→VM→SDK，前后台/锁屏、系统停止、进程重建、重启、断网/恢复、权限撤销、存储不足和 OEM 行为。API24/Galaxy S8 与 API30 x86 模拟器分别记录。当前云端没有已装 emulator/system image 或设备，本任务不操作用户 Mac。
 
 依据：[JobScheduler](https://developer.android.com/reference/android/app/job/JobScheduler)、[JobService](https://developer.android.com/reference/android/app/job/JobService)、[JobInfo.Builder 周期](https://developer.android.com/reference/android/app/job/JobInfo.Builder#setPeriodic(long))、[Doze 与 App Standby](https://developer.android.com/training/monitoring-device-state/doze-standby)。
+
+Android14+ 网络约束权限要求：[官方行为变化](https://developer.android.com/about/versions/14/behavior-changes-14)。

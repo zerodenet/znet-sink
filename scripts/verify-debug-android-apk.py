@@ -42,6 +42,7 @@ NATIVE_PREFIX = "org.zerodenet.znetsink.nativeio."
 JOB_SERVICES = (NATIVE_PREFIX + "NativePluginJobService", NATIVE_PREFIX + "NativeAppUpdateDownloadJob")
 UPDATE_RECEIVERS = (NATIVE_PREFIX + "NativeAppUpdateReceiver", NATIVE_PREFIX + "NativeAppUpdateReplacedReceiver")
 PERMISSION_PURPOSES = {
+    "android.permission.ACCESS_NETWORK_STATE": "Required normal permission for network-constrained JobScheduler on target API34+; no system setting changes",
     "android.permission.INTERNET": "Existing proxy/plugin networking and bounded HTTPS update download",
     "android.permission.RECEIVE_BOOT_COMPLETED": "Persisted Android JobScheduler intents after reboot and existing notification restoration; no exact-time promise",
     "android.permission.REQUEST_INSTALL_PACKAGES": "Explicit user-reviewed app update through Android PackageInstaller; no unknown-source setting changes",
@@ -339,11 +340,11 @@ def verify_platform_manifest(output, application_id=APP_ID):
             if name in permission_names:
                 raise ValueError("Duplicate manifest permission")
             permission_names.append(name)
-            if name in {"android.permission.INTERNET", "android.permission.RECEIVE_BOOT_COMPLETED", "android.permission.REQUEST_INSTALL_PACKAGES"} and "android:maxSdkVersion" in node["attributes"]:
+            if name in {"android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.RECEIVE_BOOT_COMPLETED", "android.permission.REQUEST_INSTALL_PACKAGES"} and "android:maxSdkVersion" in node["attributes"]:
                 raise ValueError("Required platform permission cannot be SDK-limited")
     own_permission = application_id + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
     allowed = set(PERMISSION_PURPOSES) | {own_permission}
-    required = {"android.permission.INTERNET", "android.permission.RECEIVE_BOOT_COMPLETED", "android.permission.REQUEST_INSTALL_PACKAGES"}
+    required = {"android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.RECEIVE_BOOT_COMPLETED", "android.permission.REQUEST_INSTALL_PACKAGES"}
     if not required.issubset(permission_names) or not set(permission_names).issubset(allowed):
         raise ValueError("Unexpected Android permission scope or missing job/installer permission")
     declared = [node for node in root["children"] if node["tag"] == "permission"]
