@@ -210,10 +210,7 @@ pub async fn gui_policy_groups(state: State<'_, AppState>) -> AppResult<Vec<GuiP
 
     // Always extract the protocol map from config so we can enrich
     // kernel runtime data with protocol types the kernel doesn't return.
-    let active_content = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|p| p.active)
-        .and_then(|p| p.content.clone());
+    let active_content = crate::services::policy_selection::active_content(state.inner())?;
     let kind_map = active_content
         .as_ref()
         .map(zero::config::outbound_kind_map)
@@ -252,7 +249,7 @@ pub async fn gui_select_policy(
         .await?;
     if result.accepted {
         let selected = result.selected.as_deref().unwrap_or(&target_tag);
-        crate::services::policy_selection::record_active_subscription_selection(
+        crate::services::policy_selection::record_active_configuration_selection(
             state.inner(),
             &policy_tag,
             selected,

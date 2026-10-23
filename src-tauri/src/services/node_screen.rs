@@ -41,10 +41,7 @@ pub async fn snapshot(state: &AppState, reason: Option<&str>) -> AppResult<NodeS
         return Ok(snapshot);
     };
 
-    let active_content = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .and_then(|profile| profile.content.clone());
+    let active_content = crate::services::policy_selection::active_content(state)?;
     let adapter = ZeroAdapter::new();
     let config_nodes = active_content
         .as_ref()

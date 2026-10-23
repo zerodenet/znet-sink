@@ -15,8 +15,8 @@ pub struct SubscriptionProfile {
     /// namespace is disjoint from manually-created URL subscriptions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_source: Option<ManagedSubscriptionSource>,
-    /// User-selected targets for selector policy groups. This runtime
-    /// preference belongs to the subscription and survives kernel restarts.
+    /// Legacy mirror of profile-owned manual selector choices. Retained for
+    /// existing subscriptions and SDK clients; profile choices take precedence.
     #[serde(default)]
     pub policy_selections: BTreeMap<String, String>,
     /// Auto-sync interval in seconds. When `Some` and `enabled`, the

@@ -52,7 +52,10 @@ pub(crate) fn compose_effective_candidate_for(
         &profiles,
         app.overrides.rules,
     )?;
-    let (_, selections) = policy_selection::saved_selections(state, base)?;
+    let selections = match id {
+        Some(id) => policy_selection::selections_for_profile(state, id)?,
+        None => policy_selection::saved_selections(state, base)?.1,
+    };
     let inputs = crate::configuration::composition::Inputs {
         source_profile_id: id.map(str::to_owned),
         app,
@@ -712,6 +715,7 @@ mod tests {
                 path: None,
                 content: Some(base),
                 active: true,
+                policy_selections: Default::default(),
                 managed_source: None,
                 updated_at_unix_ms: 0,
                 capabilities: ProxyConfigCapabilities::default(),
@@ -835,6 +839,7 @@ mod tests {
                 path: None,
                 content: Some(base),
                 active: true,
+                policy_selections: Default::default(),
                 managed_source: None,
                 updated_at_unix_ms: 0,
                 capabilities: ProxyConfigCapabilities::default(),
@@ -884,6 +889,7 @@ mod tests {
                 path: None,
                 content: Some(base),
                 active: true,
+                policy_selections: Default::default(),
                 managed_source: None,
                 updated_at_unix_ms: 0,
                 capabilities: ProxyConfigCapabilities::default(),

@@ -2541,10 +2541,11 @@ fn prepare_synced_proxy_config_upsert(
     // A sync replaces the generated proxy config. Reapply choices that are
     // still valid before hot-loading it; stale choices are omitted, which
     // makes Zero fall back to the selector's first member.
-    crate::services::policy_selection::apply_selections(
-        &mut parsed.content,
-        &subscription.policy_selections,
-    );
+    let mut selections = subscription.policy_selections.clone();
+    if let Some(profile) = existing_profile.as_ref() {
+        selections.extend(profile.policy_selections.clone());
+    }
+    crate::services::policy_selection::apply_selections(&mut parsed.content, &selections);
     Ok(build_synced_proxy_config_upsert(
         subscription,
         target_proxy_config_id,
@@ -3449,10 +3450,45 @@ mod tests {
             path: None,
             content: Some(json!({"outbounds": []})),
             active,
+            policy_selections: Default::default(),
             managed_source,
             updated_at_unix_ms: 1,
             capabilities: Default::default(),
         }
+    }
+
+    #[test]
+    fn sync_reapplies_profile_selection_before_loading_new_source_defaults() {
+        let base = json!({"outbound_groups":[{
+            "tag":"AI Suite", "type":"selector", "outbounds":["ix-01", "ix-02"], "selected":"ix-01"
+        }]});
+        let mut current = proxy_profile("local", true, None);
+        current.content = Some(base.clone());
+        current
+            .policy_selections
+            .insert("AI Suite".into(), "ix-02".into());
+        let mut source = subscription_with_target("source", Some("local"));
+        source
+            .policy_selections
+            .insert("AI Suite".into(), "ix-01".into());
+        let state = AppState::with_domain_data(
+            crate::models::app_config::AppConfig::default(),
+            vec![current],
+            vec![source.clone()],
+            vec![],
+            vec![],
+        );
+        let parsed = ParsedSubscriptionConfig {
+            content: base,
+            format: "zero-json".into(),
+            rule_providers: vec![],
+        };
+        let input = prepare_synced_proxy_config_upsert(&state, &source, "local", parsed).unwrap();
+        assert_eq!(
+            input.content.unwrap()["outbound_groups"][0]["selected"],
+            "ix-02"
+        );
+        assert_eq!(source.policy_selections["AI Suite"], "ix-01");
     }
 
     fn subscription_with_target(id: &str, target: Option<&str>) -> SubscriptionProfile {

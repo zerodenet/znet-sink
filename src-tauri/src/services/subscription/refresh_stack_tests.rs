@@ -102,6 +102,7 @@ async fn run_fixture() {
                     path: None,
                     content: input.content,
                     active: true,
+                    policy_selections: Default::default(),
                     managed_source: None,
                     updated_at_unix_ms: now_unix_ms(),
                     capabilities: Default::default(),

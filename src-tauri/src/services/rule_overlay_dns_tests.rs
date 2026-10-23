@@ -26,6 +26,7 @@ fn state(profiles: Vec<RuleSetProfile>, tag: &str, mode: &str) -> AppState {
                 "rule_sets":[],"rules":[],"final":{"type":"direct"}
             }})),
             active: true,
+            policy_selections: Default::default(),
             managed_source: None,
             updated_at_unix_ms: 0,
             capabilities: ProxyConfigCapabilities::default(),

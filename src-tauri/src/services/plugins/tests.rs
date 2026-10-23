@@ -58,6 +58,7 @@ impl ExternalManagedAcceptanceStore {
                 path: None,
                 content: Some(serde_json::json!({"outbounds": []})),
                 active: true,
+                policy_selections: Default::default(),
                 managed_source: None,
                 updated_at_unix_ms: 1,
                 capabilities: Default::default(),

@@ -22,6 +22,7 @@ fn owned(
         path: None,
         content: Some(json!({"outbounds": []})),
         active,
+        policy_selections: Default::default(),
         managed_source: Some(owner.clone()),
         updated_at_unix_ms: 1,
         capabilities: Default::default(),

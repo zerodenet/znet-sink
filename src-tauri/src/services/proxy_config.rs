@@ -96,6 +96,11 @@ pub(crate) fn build_upsert_profiles(
         path,
         content: input.content,
         active,
+        policy_selections: previous
+            .iter()
+            .find(|profile| profile.id == id)
+            .map(|profile| profile.policy_selections.clone())
+            .unwrap_or_default(),
         managed_source: previous
             .iter()
             .find(|profile| profile.id == id)
@@ -949,6 +954,7 @@ mod tests {
             path: None,
             content: Some(json!({ "id": id })),
             active,
+            policy_selections: Default::default(),
             managed_source: None,
             updated_at_unix_ms: 1,
             capabilities: Default::default(),
@@ -980,6 +986,17 @@ mod tests {
                 .unwrap()
                 .active
         );
+    }
+
+    #[test]
+    fn editing_or_replacing_profile_content_keeps_its_manual_choices() {
+        let mut current = profile("active", true);
+        current
+            .policy_selections
+            .insert("AI Suite".into(), "ix-02".into());
+        let (next, updated) = build_upsert_profiles(&[current], upsert("active", None)).unwrap();
+        assert_eq!(updated.policy_selections["AI Suite"], "ix-02");
+        assert_eq!(next[0].policy_selections["AI Suite"], "ix-02");
     }
 
     #[test]
