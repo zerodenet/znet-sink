@@ -1,0 +1,66 @@
+{
+  "schema": "znet.builtin-rules/v1",
+  "version": 2,
+  "generatedAtUnixMs": 1792829789000,
+  "sourceRepository": "https://github.com/MetaCubeX/meta-rules-dat",
+  "sourceCommit": "45a9c7f0489f8b1c7c3ae09192e2a6caa369a265",
+  "sourceLicense": "GPL-3.0-only",
+  "assets": [
+    {
+      "id": "builtin-private-ip",
+      "name": "私有网络地址",
+      "zrsFile": "builtin-private-ip.zrs",
+      "sourceUrl": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/45a9c7f0489f8b1c7c3ae09192e2a6caa369a265/geo/geoip/private.yaml",
+      "sourceSha256": "5c8fcfcb7305fe6a74fb279bf9aa05047fcb4b0a6289a96c81a6ee2b084148e9",
+      "irSha256": "20f595c9308708600963c95fbf0d12570eea8691e937ac454719186d700bdb25",
+      "zrsChecksum": 778107070,
+      "zrsSha256": "98d712089398fb0705b84947b6911fb2184c25c72369e199c05464c25271029f",
+      "zrsFileSize": 872,
+      "entryCount": 28,
+      "defaultAction": "direct",
+      "defaultOrder": 10
+    },
+    {
+      "id": "builtin-cn-domain",
+      "name": "中国大陆域名",
+      "zrsFile": "builtin-cn-domain.zrs",
+      "sourceUrl": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/45a9c7f0489f8b1c7c3ae09192e2a6caa369a265/geo/geosite/cn.yaml",
+      "sourceSha256": "ea958825e64bcb9a273d3dcf0b1ae1469e34c9967a8d6009daffab139d52d272",
+      "irSha256": "9c6015f45a3eab1e82b159a078c9a0f11d9d97f959871f541bc7353880c8f1af",
+      "zrsChecksum": 1547810789,
+      "zrsSha256": "120ae48079b99b96bb860cc5dd33290962229f86fb11a0d7c060fb1fe9293fe8",
+      "zrsFileSize": 831240,
+      "entryCount": 110448,
+      "defaultAction": "direct",
+      "defaultOrder": 20
+    },
+    {
+      "id": "builtin-cn-ip",
+      "name": "中国大陆 IP",
+      "zrsFile": "builtin-cn-ip.zrs",
+      "sourceUrl": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/45a9c7f0489f8b1c7c3ae09192e2a6caa369a265/geo/geoip/cn.yaml",
+      "sourceSha256": "255e5b0e25fb66e585b7bf262c79e1aa4fd669654f0938478f646d066ecba8eb",
+      "irSha256": "d8b57213f2f732bc4d080d8872cc2aaeae7dbd89ddd2e5e38bd49034ce0d50f4",
+      "zrsChecksum": 2031632789,
+      "zrsSha256": "ac309805f00f44682ee60b25b94f3f72b07e20111a7d51bc8952ab6a4dadd44b",
+      "zrsFileSize": 108760,
+      "entryCount": 6740,
+      "defaultAction": "direct",
+      "defaultOrder": 30
+    },
+    {
+      "id": "builtin-gfw-domain",
+      "name": "GFW 域名",
+      "zrsFile": "builtin-gfw-domain.zrs",
+      "sourceUrl": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/45a9c7f0489f8b1c7c3ae09192e2a6caa369a265/geo/geosite/gfw.yaml",
+      "sourceSha256": "5a1f8844792c49a8d5f4d1a858bf5ec449d9b826cafe24372fef0326320f21bc",
+      "irSha256": "92a16718ce9186941c9c09220ef6a69660bd8cc10817d0d46af44188e9ee0a42",
+      "zrsChecksum": 3934914715,
+      "zrsSha256": "e81513688333f4d68444403803822533421befd81a359fb2ca22a74a5440f9bf",
+      "zrsFileSize": 39144,
+      "entryCount": 4415,
+      "defaultAction": "proxy",
+      "defaultOrder": 40
+    }
+  ]
+}
