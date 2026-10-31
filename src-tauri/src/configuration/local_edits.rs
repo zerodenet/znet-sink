@@ -41,6 +41,7 @@ pub(crate) fn resolve(
     // Legacy choices are migrated at load/import; defaults cannot override profiles.
     app.overrides = Default::default();
     let mut source = base.clone();
+    super::user_endpoints::merge(&mut source, &app.user_endpoints)?;
     let mut edits = app.client_edits.clone().unwrap_or_default();
     if let Some(endpoints) = id
         .and_then(|id| app.profile_edits.get(id))
@@ -50,7 +51,18 @@ pub(crate) fn resolve(
     }
     for (key, value) in &edits {
         match key.as_str() {
-            "endpoints" => super::endpoints::apply(&mut source, value)?,
+            "endpoints" => {
+                // Global definitions own their state across profile switches.
+                let mut prefs = value.clone();
+                if let Some(prefs) = prefs.as_object_mut() {
+                    for row in &app.user_endpoints {
+                        if let Some(tag) = row["tag"].as_str() {
+                            prefs.remove(tag);
+                        }
+                    }
+                }
+                super::endpoints::apply(&mut source, &prefs)?;
+            }
             "localProxy.host" | "localProxy.port" => {
                 proxy_config::project_endpoint(&mut source, &app.local_proxy, false)?;
                 let inbounds = source["inbounds"]

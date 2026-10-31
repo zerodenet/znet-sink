@@ -105,3 +105,52 @@ fn endpoint_preferences_delete_only_owned_overrides_and_restore_rollback_snapsho
     prune(&mut next, &HashSet::from(["a", "b"]));
     assert_eq!(next.profile_edits, previous.profile_edits);
 }
+
+#[test]
+fn global_user_endpoint_controls_follow_profile_switches_and_ignore_old_profile_overrides() {
+    use crate::configuration::{local_edits, user_endpoints};
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let mut app = AppConfig::default();
+    app.user_endpoints
+        .push(serde_json::json!({"tag":"global-wg","enabled":true,
+        "directions":{"inbound":false,"outbound":true},"protocol":{"type":"wireguard",
+        "private_key":STANDARD.encode([1;32]),"addresses":["10.2.0.1/32"],
+        "peers":[{"public_key":STANDARD.encode([2;32]),"allowed_ips":["0.0.0.0/0"]}]}}));
+    app.profile_edits.insert(
+        "a".into(),
+        std::collections::BTreeMap::from([(
+            "endpoints".into(),
+            serde_json::json!({"global-wg":{"protocol":"wireguard","enabled":false}}),
+        )]),
+    );
+    let (_, source) = local_edits::resolve(&app, Some("a"), &serde_json::json!({})).unwrap();
+    assert_eq!(source["endpoints"][0]["enabled"], true);
+    let row = serde_json::json!({"tag":"global-wg","protocol":"wireguard"});
+    assert!(owns(&source, &row));
+    let next = candidate(
+        &app,
+        "a",
+        &source,
+        &row,
+        &Action::SetState {
+            enabled: false,
+            persistence: crate::services::network_endpoint::Persistence::RuntimeOnly,
+        },
+    )
+    .unwrap();
+    for id in ["a", "b"] {
+        assert_eq!(
+            local_edits::resolve(&next, Some(id), &serde_json::json!({}))
+                .unwrap()
+                .1["endpoints"][0]["enabled"],
+            false
+        );
+    }
+    let mut persisted =
+        serde_json::from_value::<AppConfig>(serde_json::to_value(next).unwrap()).unwrap();
+    prune(&mut persisted, &std::collections::HashSet::new());
+    assert_eq!(persisted.user_endpoints.len(), 1);
+    let mut source = serde_json::json!({});
+    user_endpoints::merge(&mut source, &persisted.user_endpoints).unwrap();
+    assert_eq!(source["endpoints"][0]["enabled"], false);
+}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Network, MoreHorizontal, LoaderCircle, RotateCw, Info, ArrowDownToLine, ArrowUpFromLine, Cable, Boxes, Route, Pin, AlertTriangle, MapPin } from '@lucide/svelte';
+  import { Network, Pencil, Trash2, MoreHorizontal, LoaderCircle, RotateCw, Info, ArrowDownToLine, ArrowUpFromLine, Cable, Boxes, Route, Pin, AlertTriangle, MapPin } from '@lucide/svelte';
   import EndpointObservationView from './EndpointObservationView.svelte';
   import EndpointDetailsView from './EndpointDetailsView.svelte';
   import TrafficMiniChart from './TrafficMiniChart.svelte';
@@ -12,7 +12,8 @@
   import { directionLabel, endpointStateLabel, operationReason, directionRequiresRestart } from '$lib/features/endpoints/policy';
   import type { EndpointTraffic } from '$lib/features/endpoints/traffic';
   import type { EndpointAction, EndpointCatalog, EndpointDetails, NetworkEndpoint } from '$lib/features/endpoints/types';
-  let { endpoint, catalog, disabled, onAction, onInspect, details = null, detailsError = null, inspecting = false, traffic, observation, observationAvailable = false, observationStale = false, pending = false, stale = false }: {
+  let { endpoint, catalog, disabled, userOwned = false, managementDisabled = false, onEdit, onDelete, onAction, onInspect, details = null, detailsError = null, inspecting = false, traffic, observation, observationAvailable = false, observationStale = false, pending = false, stale = false }: {
+    userOwned?: boolean; managementDisabled?: boolean; onEdit?: () => void; onDelete?: () => void;
     endpoint: NetworkEndpoint; catalog: EndpointCatalog; disabled: boolean; details?: EndpointDetails | null; inspecting?: boolean;
     observation?: Observation; observationAvailable?: boolean; observationStale?: boolean;
     traffic?: EndpointTraffic; pending?: boolean; stale?: boolean;
@@ -61,11 +62,16 @@
     <div class="identity"><div class="endpoint-icon"><Network size={20} /></div><div class="min-w-0"><h3>{endpoint.tag}</h3><span class="protocol">{endpoint.protocol}</span></div></div>
     <div class="header-tools">
       {#if pending}<LoaderCircle size={13} class="animate-spin" aria-label="正在应用" />{/if}
-      {#if catalog.localOverrideIds.includes(endpoint.endpoint_id)}<span class="temporary" title="当前配置的本地覆盖；重启和订阅更新后保留"><Pin size={12} />本地</span>{/if}
-      <button data-slot="surface-button" class="power-switch" role="switch" aria-checked={endpoint.enabled} aria-label={endpoint.enabled ? '停用端点' : '启用端点'} disabled={disabled || !!stateReason} title={stateReason ?? '自动保留到当前配置；停用会结束现有连接'} onclick={() => act(stateAction)}><span></span></button>
+      {#if userOwned}<span class="temporary" title="用户创建，自动加入所有配置"><Pin size={12} />用户</span>{:else if catalog.localOverrideIds.includes(endpoint.endpoint_id)}<span class="temporary" title="当前配置的本地覆盖；重启和订阅更新后保留"><Pin size={12} />本地</span>{/if}
+      <button data-slot="surface-button" class="power-switch" role="switch" aria-checked={endpoint.enabled} aria-label={endpoint.enabled ? '停用端点' : '启用端点'} disabled={disabled || !!stateReason} title={stateReason ?? (userOwned ? '全局保留；停用会结束现有连接' : '自动保留到当前配置；停用会结束现有连接')} onclick={() => act(stateAction)}><span></span></button>
       <details class="options" bind:this={menuElement} bind:open={menuOpen}>
         <summary aria-label={`${endpoint.tag} 更多操作`} title="更多操作"><MoreHorizontal size={18} /></summary>
         <div class="option-menu">
+          {#if userOwned}
+            <Button variant="ghost" size="sm" disabled={managementDisabled} onclick={() => { menuOpen = false; onEdit?.(); }}><Pencil size={14} />编辑端点</Button>
+            <Button variant="ghost" size="sm" disabled={managementDisabled} onclick={() => { menuOpen = false; onDelete?.(); }}><Trash2 size={14} />删除端点</Button>
+            <div class="menu-divider"></div>
+          {/if}
           <Button variant="ghost" size="sm" disabled={disabled || !!restartReason} aria-label="重启端点" title={restartReason ?? '重启会结束现有连接'} onclick={() => act({ operation: 'restart' })}><RotateCw size={14} />重启端点</Button>
           <div class="menu-divider"></div>
           <Button variant="ghost" size="sm" disabled={disabled || inspecting || !endpoint.supported.operations.includes('details')} aria-label="协议详情" onclick={() => showDetail('protocol')}><Network size={14} />协议详情</Button>

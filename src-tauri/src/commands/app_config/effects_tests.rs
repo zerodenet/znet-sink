@@ -111,3 +111,14 @@ fn global_dns_and_tun_changes_rebuild_capture_with_unchanged_raw_defaults() {
         }
     }
 }
+
+#[test]
+fn global_user_endpoint_changes_recompose_without_restarting_capture_or_retargeting_proxy() {
+    let old = AppConfig::default();
+    let mut next = old.clone();
+    next.user_endpoints
+        .push(serde_json::json!({"tag":"global-wg"}));
+    for effects in [between(&old, &next), between(&next, &old)] {
+        assert!(effects.recompose && !effects.restart && !effects.retarget_proxy);
+    }
+}

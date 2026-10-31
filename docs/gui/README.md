@@ -62,6 +62,7 @@ const config = await invoke('app_config_get');
 - [能力快照](./capabilities.md)
 - [Zero 适配层接口](./zero-adapter.md)
 - [内核接入](./core.md)
+- [全局用户端点与协议扩展](./user-endpoints.md)
 - [代理配置](./proxy-config.md)
 - [订阅管理](./subscriptions.md)
 - [规则集配置](./rule-sets.md)

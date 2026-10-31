@@ -133,6 +133,10 @@ pub(crate) fn active_content(state: &AppState) -> AppResult<Option<Value>> {
         &mut content,
         &resolve_selections(&profiles, &sources, &profile.id),
     );
+    drop(sources);
+    drop(profiles);
+    let app = common::lock(state.app_config(), "app_config")?;
+    crate::configuration::user_endpoints::merge(&mut content, &app.user_endpoints)?;
     Ok(Some(content))
 }
 

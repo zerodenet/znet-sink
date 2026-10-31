@@ -11,6 +11,24 @@ const base = (tag: string, protocol: string): NetworkEndpoint => ({
   counters:{inner_rx_bytes:null,inner_tx_bytes:null,outer_rx_bytes:null,outer_tx_bytes:null,active_packet_routes:null,active_stream_flows:0,active_datagram_flows:2},last_error:null,
 });
 let endpoints=[base('wg-a','wireguard'),base('mesh-b','future_mesh')];
+const userAddresses: Record<string, string[]> = {};
+let userTags = new Set<string>();
+function applyUserPreview(rows: {tag:string;enabled?:boolean;directions?:{inbound:boolean;outbound:boolean};addresses:string[]}[]) {
+  endpoints = endpoints.filter(row => !userTags.has(row.tag));
+  userTags = new Set(rows.map(row => row.tag));
+  for (const definition of rows) {
+    const row = base(definition.tag, 'wireguard');
+    row.enabled = definition.enabled ?? true;
+    row.allowed = definition.directions ?? { inbound:false, outbound:true };
+    row.effective = row.enabled ? { ...row.allowed } : { inbound:false, outbound:false };
+    row.state = row.enabled ? 'running' : 'stopped';
+    userAddresses[row.endpoint_id] = definition.addresses;
+    endpoints.push(row);
+  }
+}
+if (params().has('preview')) applyUserPreview([{tag:'wg-home',enabled:true,directions:{inbound:false,outbound:true},addresses:['10.66.0.2/32','fd66::2/128']}]);
+window.addEventListener('fixture-user-endpoints-changed', event => applyUserPreview((event as CustomEvent<Parameters<typeof applyUserPreview>[0]>).detail));
+
 if (params().has('legacy-role-stats')) endpoints=endpoints.map(row=>({...row,configuration:{origin:'legacy'},endpoint_id:`opaque-role/${row.tag}`,inbound_tags:[],allowed:{inbound:false,outbound:true},effective:{inbound:false,outbound:true},counters:{...row.counters,active_stream_flows:0,active_datagram_flows:0,active_packet_routes:null}}));
 if (params().has('long-details')) {
   endpoints[0].inbound_tags = ['endpoint/' + 'long-resource-name-'.repeat(8)];
@@ -72,7 +90,7 @@ export const endpointGateway: EndpointGateway = {
     capabilities.features=['network_endpoint_catalog_v1','network_endpoint_control_v1',...(params().has('old-preconditions')?[]:['network_endpoint_control_preconditions_v1'])];
     capabilities.globalLimitations=[params().has('old-control') ? 'endpoint_live_direction_contraction_requires_stop' : 'endpoint_live_outbound_direction_contraction_requires_stop'];
     if (params().has('observe-only')) endpoints.forEach(row => { row.supported.operations=['list','get','details']; });
-    return {capabilities,endpoints:structuredClone(endpoints),profileId:'profile-a',editableEndpointIds:params().has('unowned')?[]:endpoints.map(row=>row.endpoint_id),localOverrideIds:Object.keys(localOverrides),configuredAddresses:{[endpoints[0].endpoint_id]:showAddresses?['10.66.0.2/32','fd66:1234:5678:90ab::2/128']:[]}};
+    return {capabilities,endpoints:structuredClone(endpoints),profileId:'profile-a',editableEndpointIds:params().has('unowned')?[]:endpoints.map(row=>row.endpoint_id),localOverrideIds:Object.keys(localOverrides),configuredAddresses:{...userAddresses,[endpoints[0].endpoint_id]:showAddresses?['10.66.0.2/32','fd66:1234:5678:90ab::2/128']:[]}};
   },
   async control(input) {
     window.dispatchEvent(new CustomEvent('fixture-save',{detail:input}));

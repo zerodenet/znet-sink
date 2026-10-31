@@ -51,8 +51,11 @@ fn active(state: &AppState) -> AppResult<Option<(String, Value)>> {
 }
 pub async fn catalog(state: &AppState, options: CoreIpcOptions) -> AppResult<ManagedCatalog> {
     let catalog = super::catalog(options).await?;
-    let source = active(state)?;
+    let mut source = active(state)?;
     let app = lock(state.app_config(), "app_config")?;
+    if let Some((_, source)) = source.as_mut() {
+        crate::configuration::user_endpoints::merge(source, &app.user_endpoints)?;
+    }
     let mut editable_endpoint_ids = Vec::new();
     let mut local_override_ids = Vec::new();
     let configured_addresses = source
@@ -139,7 +142,7 @@ pub async fn control(
     input: ManagedInput,
     options: CoreIpcOptions,
 ) -> AppResult<Value> {
-    let (profile, source) =
+    let (profile, mut source) =
         active(state)?.ok_or_else(|| AppError::invalid_argument("请先选择一份配置"))?;
     let caps = crate::kernel::zero::queries::zero_capabilities(Some(options.clone())).await?;
     if !super::supports(&caps, "network_endpoint_control_v1") {
@@ -147,6 +150,7 @@ pub async fn control(
     }
     let current = super::get(&input.endpoint_id, options.clone()).await?;
     let previous = lock(state.app_config(), "app_config")?.clone();
+    crate::configuration::user_endpoints::merge(&mut source, &previous.user_endpoints)?;
     let (input, next, revision) = prepare(input, &profile, &source, &current, &previous)?;
     let changed = !matches!(input.action, Action::Restart {});
     super::control_params(&input, &current, &caps)?;

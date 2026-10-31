@@ -167,3 +167,22 @@ fn failed_storage_and_invalid_targets_do_not_publish_saved_choices() {
     .is_err());
     assert!(profiles[0].policy_selections.is_empty());
 }
+
+#[test]
+fn offline_node_browsing_includes_global_user_endpoints_without_modifying_profiles() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let original = profile("local", true);
+    let mut app = AppConfig::default();
+    app.user_endpoints
+        .push(json!({"tag":"global-wg","protocol":{"type":"wireguard",
+        "private_key":STANDARD.encode([1;32]),"addresses":["10.2.0.1/32"],
+        "peers":[{"public_key":STANDARD.encode([2;32]),"allowed_ips":["0.0.0.0/0"]}]}}));
+    let state = AppState::with_domain_data(app, vec![original.clone()], vec![], vec![], vec![]);
+    let content = active_content(&state).unwrap().unwrap();
+    let nodes = crate::kernel::zero::config::proxy_nodes_from_config(&content);
+    assert!(nodes.iter().any(|node| node.tag == "global-wg"));
+    assert_eq!(
+        common::lock(state.proxy_configs(), "proxy_config").unwrap()[0].content,
+        original.content
+    );
+}

@@ -1,5 +1,9 @@
 # 客户端通用端点管理 V1
 
+后续已增加[全局用户端点层](global-user-endpoints.md)：客户端独立管理 WireGuard
+定义，并合并到每份配置。本文的运行时公共控制契约边界仍适用；新建、删除与
+peer 编辑通过客户端配置合成处理。专业模式入口现默认可见，保留显式隐藏设置。
+
 对照 Zero `network-endpoint-catalog-v1.md`、`network-endpoint-control-v1.md` 与
 `wireguard-1` 对话的当前实现（2026-09-30）。本次只修改客户端。
 

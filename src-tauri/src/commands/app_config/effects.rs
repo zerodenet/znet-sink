@@ -51,7 +51,8 @@ pub(super) fn between(old: &AppConfig, next: &AppConfig) -> Effects {
             || old.core.config_path != next.core.config_path
             || (old.bypass != next.bypass
                 && crate::services::bypass::network_rules_changed(old, next)),
-        recompose: local
+        recompose: old.user_endpoints != next.user_endpoints
+            || local
             || endpoint
             || old.url_test != next.url_test
             || old.routing != next.routing

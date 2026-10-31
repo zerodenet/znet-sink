@@ -397,21 +397,12 @@ pub async fn gui_rule_status(state: State<'_, AppState>) -> AppResult<GuiFeature
 /// Does NOT require the core to be running — this is static config data.
 #[tauri::command]
 pub fn gui_proxy_nodes(state: State<'_, AppState>) -> AppResult<Vec<ConfigProxyNode>> {
-    let active = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|p| p.active)
-        .cloned();
-
-    let Some(active) = active else {
-        return Ok(Vec::new());
-    };
-
-    let Some(content) = &active.content else {
+    let Some(content) = crate::services::policy_selection::active_content(state.inner())? else {
         return Ok(Vec::new());
     };
 
     let adapter = ZeroAdapter::new();
-    adapter.proxy_nodes_from_config(content)
+    adapter.proxy_nodes_from_config(&content)
 }
 
 /// Return policy groups directly from the active proxy config file.
@@ -420,21 +411,12 @@ pub fn gui_proxy_nodes(state: State<'_, AppState>) -> AppResult<Vec<ConfigProxyN
 /// with kernel runtime state (selected, latency, alive) layered on top.
 #[tauri::command]
 pub fn gui_config_policy_groups(state: State<'_, AppState>) -> AppResult<Vec<GuiPolicyGroup>> {
-    let active = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|p| p.active)
-        .cloned();
-
-    let Some(active) = active else {
-        return Ok(Vec::new());
-    };
-
-    let Some(content) = &active.content else {
+    let Some(content) = crate::services::policy_selection::active_content(state.inner())? else {
         return Ok(Vec::new());
     };
 
     let adapter = ZeroAdapter::new();
-    adapter.policy_groups_from_config(content)
+    adapter.policy_groups_from_config(&content)
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -335,7 +335,7 @@ fn ipc_options(state: &AppState) -> AppResult<CoreIpcOptions> {
     Ok(core_config::ipc_options_from_app_config(&app.core))
 }
 
-fn ensure_validation_accepted(response: &Value) -> AppResult<()> {
+pub(crate) fn ensure_validation_accepted(response: &Value) -> AppResult<()> {
     let mut current = response;
     for _ in 0..6 {
         if current.get("valid").and_then(Value::as_bool) == Some(true) {

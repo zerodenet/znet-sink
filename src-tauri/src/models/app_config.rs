@@ -5,6 +5,9 @@ use super::dns_config::ClientDnsConfig;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    /// Client-owned definitions, merged into every source profile.
+    #[serde(default)]
+    pub user_endpoints: Vec<serde_json::Value>,
     /// Sparse settings shared by every profile. None marks pre-global storage.
     #[serde(default)]
     pub client_edits: Option<std::collections::BTreeMap<String, serde_json::Value>>,
@@ -40,6 +43,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            user_endpoints: Vec::new(),
             client_edits: Some(Default::default()),
             profile_edits: Default::default(),
             overrides: ConfigOverrides::default(),

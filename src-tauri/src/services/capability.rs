@@ -204,9 +204,9 @@ fn feature(key: &str, enabled: bool, missing_active_reason: &Option<String>) -> 
 
 fn endpoints_menu_visible(
     ui: &crate::models::app_config::AppUiConfig,
-    has_endpoints: bool,
+    _has_endpoints: bool,
 ) -> bool {
-    ui.endpoints_menu_visible.unwrap_or(has_endpoints)
+    ui.endpoints_menu_visible.unwrap_or(true)
 }
 
 // Detect declarations without relying on a running or reachable kernel.
@@ -587,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn endpoints_navigation_defaults_to_declarations_and_preserves_explicit_choices() {
+    fn endpoints_navigation_allows_creation_and_preserves_explicit_choices() {
         let mut ui = crate::models::app_config::AppUiConfig::default();
         for preference in [None, Some(false), Some(true)] {
             ui.endpoints_menu_visible = preference;
@@ -600,7 +600,7 @@ mod tests {
                         endpoints_menu_visible(&ui, declared),
                     );
                     let endpoint = items.iter().find(|item| item.key == "endpoints").unwrap();
-                    assert_eq!(endpoint.visible, pro && preference.unwrap_or(declared));
+                    assert_eq!(endpoint.visible, pro && preference.unwrap_or(true));
                     assert!(endpoint.operable);
                 }
             }

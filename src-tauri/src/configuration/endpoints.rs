@@ -39,7 +39,10 @@ pub(crate) fn owns(source: &Value, endpoint: &Value) -> bool {
         })
 }
 pub(crate) fn has_override(app: &AppConfig, profile: &str, endpoint: &Value) -> bool {
-    app.profile_edits
+    app.user_endpoints.iter().any(|row| {
+        row["tag"] == endpoint["tag"] && row.pointer("/protocol/type") == endpoint.get("protocol")
+    }) || app
+        .profile_edits
         .get(profile)
         .and_then(|edits| edits.get("endpoints"))
         .and_then(|value| value.get(endpoint["tag"].as_str()?))
@@ -61,6 +64,18 @@ pub(crate) fn candidate(
     }
     let mut next = app.clone();
     if matches!(action, Action::Restart {}) {
+        return Ok(next);
+    }
+    if let Some(row) = next.user_endpoints.iter_mut().find(|row| {
+        row["tag"] == endpoint["tag"] && row.pointer("/protocol/type") == endpoint.get("protocol")
+    }) {
+        match action {
+            Action::SetState { enabled, .. } => row["enabled"] = Value::Bool(*enabled),
+            Action::SetDirections { directions, .. } => {
+                row["directions"] = serde_json::to_value(directions).unwrap()
+            }
+            _ => return Err(AppError::invalid_argument("不支持的用户端点操作")),
+        }
         return Ok(next);
     }
     let edits = next.profile_edits.entry(profile.into()).or_default();

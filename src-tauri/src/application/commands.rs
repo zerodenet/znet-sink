@@ -104,6 +104,8 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         traffic_commands::gui_traffic_page,
         traffic_commands::gui_traffic_get,
         traffic_commands::gui_traffic_reset,
+        endpoint_commands::gui_user_endpoints,
+        endpoint_commands::gui_user_endpoints_save,
         endpoint_commands::gui_endpoint_catalog,
         endpoint_commands::gui_endpoint_details,
         endpoint_commands::gui_endpoint_control,
