@@ -12,7 +12,7 @@
   import EndpointCard from './EndpointCard.svelte';
   import EndpointEditor from './EndpointEditor.svelte';
   import type { UserEndpoint } from '$lib/features/endpoints/library';
-  let editor: { edit: (tag?: string | null) => Promise<void>; remove: (tag: string) => Promise<void>; refresh: () => Promise<void> } | undefined = $state();
+  let editor: { edit: (tag?: string | null) => Promise<void>; remove: (tag: string) => Promise<void>; refresh: () => Promise<void>; importFiles: () => Promise<void> } | undefined = $state();
   let userEndpoints = $state<UserEndpoint[]>([]);
   let userBusy = $state(false);
   import type { TrafficView, TrafficSession } from '$lib/features/traffic/session';
@@ -95,7 +95,7 @@
 </script>
 <section class="endpoints-panel" aria-label="端点管理">
   <EndpointEditor bind:this={editor} bind:busy={userBusy} onChange={rows => userEndpoints = rows} disabled={!!view.busy} onSaved={() => { session.invalidate(); void refreshHostAndDirectory(); }} />
-  <header><div class="heading"><h2>端点</h2><span class="count">{(view.catalog?.endpoints.length ?? 0) + configured.length}</span></div><div class="toolbar"><span class="panel-status" class:failed={!!panelError} class:confirmed={!!view.result && !panelError} role={panelError ? 'alert' : 'status'} title={panelError ?? view.result ?? (view.stale ? '保留上次观测，等待目录确认；控制暂不可用。' : '端点目录已同步')} aria-label="端点目录状态">{#if view.result && !panelError}<Check size={13}/>{:else}<i></i>{/if}<span>{panelStatus}</span>{#if panelError}<span class="sr-only">{panelError}</span>{/if}</span><Button variant="ghost" size="icon-sm" aria-label="刷新端点" title="刷新端点" disabled={view.loading || !!view.busy} onclick={() => { void editor?.refresh(); void refreshHostAndDirectory(); }}><RefreshCw size={15} class={view.loading ? 'animate-spin' : ''} /></Button><Button size="sm" disabled={!!view.busy || userBusy} onclick={() => editor?.edit()}><Plus size={14} />创建端点</Button></div></header>
+  <header><div class="heading"><h2>端点</h2><span class="count">{(view.catalog?.endpoints.length ?? 0) + configured.length}</span></div><div class="toolbar"><span class="panel-status" class:failed={!!panelError} class:confirmed={!!view.result && !panelError} role={panelError ? 'alert' : 'status'} title={panelError ?? view.result ?? (view.stale ? '保留上次观测，等待目录确认；控制暂不可用。' : '端点目录已同步')} aria-label="端点目录状态">{#if view.result && !panelError}<Check size={13}/>{:else}<i></i>{/if}<span>{panelStatus}</span>{#if panelError}<span class="sr-only">{panelError}</span>{/if}</span><Button variant="ghost" size="icon-sm" aria-label="刷新端点" title="刷新端点" disabled={view.loading || !!view.busy} onclick={() => { void editor?.refresh(); void refreshHostAndDirectory(); }}><RefreshCw size={15} class={view.loading ? 'animate-spin' : ''} /></Button><Button variant="outline" size="sm" disabled={!!view.busy || userBusy} onclick={() => editor?.importFiles()}>导入配置</Button><Button size="sm" disabled={!!view.busy || userBusy} onclick={() => editor?.edit()}><Plus size={14} />创建端点</Button></div></header>
   {#if view.busy}<p role="status" class="sr-only">正在等待内核确认</p>{/if}
   {#if view.catalog && !catalogSupported(view.catalog)}
     <p class="empty">当前内核未声明兼容的端点目录能力。用户端点可继续创建和编辑；运行状态需要兼容内核确认。</p>

@@ -11,7 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test:network-endpoints": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-network-endpoints.mjs",
+    "test:network-endpoints": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-network-endpoints.mjs scripts/test-wireguard-import.mjs",
     "test:nodes": "pnpm test:nodes-view-model && pnpm test:nodes-probe-state && pnpm test:nodes-select",
     "test:nodes-view-model": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-nodes-view-model.mjs",
     "test:nodes-select": "node scripts/test-nodes-select-args.mjs",

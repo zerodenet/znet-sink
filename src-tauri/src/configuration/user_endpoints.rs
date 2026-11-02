@@ -50,12 +50,26 @@ pub(crate) fn validate(rows: &[Value]) -> AppResult<()> {
                 return Err(invalid("端点必须启用至少一个方向"));
             }
         }
+        if row["directions"]["inbound"] == true && row.get("listen").is_none() {
+            return Err(invalid("启用入站时请配置本机 UDP 监听地址和端口"));
+        }
+        if let Some(listen) = row.get("listen") {
+            if !listen["address"]
+                .as_str()
+                .is_some_and(|value| value.parse::<std::net::IpAddr>().is_ok())
+                || !listen["port"].as_u64().is_some_and(|value| value <= 65535)
+            {
+                return Err(invalid(
+                    "本机 UDP 监听地址必须为 IP，端口须为 0～65535（0 表示自动分配）",
+                ));
+            }
+        }
         let protocol = &row["protocol"];
         let adapter = PROTOCOLS
             .iter()
             .find(|adapter| protocol["type"].as_str() == Some(adapter.kind))
             .ok_or_else(|| invalid("当前客户端尚不支持此端点协议的创建或编辑"))?;
-        (adapter.validate)(protocol)?;
+        (adapter.validate)(row)?;
     }
     Ok(())
 }
@@ -164,6 +178,10 @@ fn references(value: &Value, tag: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "user_endpoints/wireguard_tests.rs"]
+mod wireguard_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use base64::{engine::general_purpose::STANDARD, Engine};
@@ -237,6 +255,8 @@ mod tests {
             assert!(validate(&[row]).is_err(), "{path}");
         }
         let mut inbound = endpoint();
+        inbound["directions"] = json!({"inbound":true,"outbound":false});
+        inbound["listen"] = json!({"address":"0.0.0.0","port":51820});
         inbound["protocol"]["peers"][0]
             .as_object_mut()
             .unwrap()

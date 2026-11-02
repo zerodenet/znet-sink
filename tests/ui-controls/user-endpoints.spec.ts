@@ -15,6 +15,7 @@ test.beforeEach(async ({ page }) => {
     host.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
       if (command === 'gui_user_endpoints') return { revision: String(revision), endpoints, protocols };
       if (command === 'gui_user_endpoints_save') {
+        window.dispatchEvent(new CustomEvent('fixture-library-save-attempt', { detail: args }));
         if (hold) await new Promise<void>(resolve => window.addEventListener('fixture-release-library-save', () => { hold = false; resolve(); }, { once: true }));
         if (args?.expectedRevision !== String(revision)) throw new Error('用户端点已变化，请刷新后重新编辑');
         const rows = args?.endpoints as { tag: string }[];
@@ -59,6 +60,7 @@ test('one endpoint list supports creation and card editing deletion through dial
   await dialog.getByRole('button', { name: '添加 Peer', exact: true }).click();
   await dialog.getByRole('textbox', { name: '公钥', exact: true }).nth(1).fill('AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=');
   await dialog.getByRole('textbox', { name: '允许的 IP', exact: true }).nth(1).fill('10.67.0.0/16');
+  await dialog.getByLabel('远端地址', { exact: true }).nth(1).fill('peer-two.example:51820');
   await dialog.getByRole('button', { name: '保存并应用' }).click();
   await cardMenu(page, 'my-wg', '编辑端点');
   await expect(dialog.getByRole('textbox', { name: '公钥', exact: true })).toHaveCount(2);
@@ -172,4 +174,112 @@ test('protocol form preserves typed CIDR separators and serializes multiple addr
   dialog = page.getByRole('dialog', { name: '编辑端点', exact: true });
   await expect(dialog.getByRole('textbox', { name: '本机隧道地址', exact: true })).toHaveValue('10.66.0.2/32, fd66::2/128');
   await expect(dialog.getByRole('textbox', { name: '允许的 IP', exact: true })).toHaveValue('10.66.0.0/16, fd66::/64');
+});
+
+const importConf = `[Interface]
+PrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
+Address = 10.66.0.2/32, fd66::2/128
+DNS = 1.1.1.1
+MTU = 1380
+[Peer]
+PublicKey = AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=
+PresharedKey = AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=
+Endpoint = vpn.example:51820
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+`;
+const configFile = (name: string, content = importConf) => ({ name, mimeType: 'text/plain', buffer: Buffer.from(content) });
+
+test('invalid tunnel addresses identify and focus the field without attempting a save', async ({ page }) => {
+  const dialog = await fillEndpoint(page);
+  await page.evaluate(() => {
+    document.body.dataset.endpointSaveAttempts = '0';
+    window.addEventListener('fixture-library-save-attempt', () => { document.body.dataset.endpointSaveAttempts = String(Number(document.body.dataset.endpointSaveAttempts) + 1); });
+  });
+  const addresses = dialog.getByRole('textbox', { name: '本机隧道地址', exact: true });
+  await addresses.fill('AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=');
+  await dialog.getByRole('button', { name: '保存并应用' }).click();
+  await expect(addresses).toBeFocused();
+  await expect(addresses).toHaveAttribute('aria-invalid', 'true');
+  await expect(dialog.getByRole('alert')).toContainText('这里不能填写密钥');
+  await expect(dialog).toContainText('不是私钥或公钥');
+  await expect(page.locator('body')).toHaveAttribute('data-endpoint-save-attempts', '0');
+  await expect(page.getByRole('article', { name: '端点 my-wg', exact: true })).toHaveCount(0);
+});
+
+test('enabling inbound exposes listener configuration and persists it', async ({ page }) => {
+  let dialog = await fillEndpoint(page);
+  await expect(dialog.getByRole('textbox', { name: '监听端口', exact: true })).toHaveCount(0);
+  await dialog.getByRole('switch', { name: '入站', exact: true }).click();
+  await dialog.getByRole('textbox', { name: '监听地址', exact: true }).fill('127.0.0.1');
+  await dialog.getByRole('textbox', { name: '监听端口', exact: true }).fill('51821');
+  await dialog.getByRole('button', { name: '保存并应用' }).click();
+  await expect(dialog).toHaveCount(0);
+  await cardMenu(page, 'my-wg', '编辑端点');
+  dialog = page.getByRole('dialog', { name: '编辑端点', exact: true });
+  await expect(dialog.getByRole('textbox', { name: '监听地址', exact: true })).toHaveValue('127.0.0.1');
+  await expect(dialog.getByRole('textbox', { name: '监听端口', exact: true })).toHaveValue('51821');
+});
+
+test('file filling replaces visible fields, preserves the name and retains optional connection settings', async ({ page }) => {
+  let dialog = await fillEndpoint(page, 'custom-name');
+  await dialog.getByRole('textbox', { name: '本机隧道地址', exact: true }).fill('wrong-address');
+  await dialog.getByRole('button', { name: '保存并应用' }).click();
+  await expect(dialog.getByRole('alert')).toBeVisible();
+  await dialog.getByLabel('从文件填写 WireGuard', { exact: true }).setInputFiles(configFile('home.conf'));
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  await expect(dialog.getByRole('textbox', { name: '端点名称', exact: true })).toHaveValue('custom-name');
+  await expect(dialog.getByLabel('MTU', { exact: true })).toHaveValue('1380');
+  await expect(dialog.getByLabel('保活间隔（秒）', { exact: true })).toHaveValue('25');
+  await expect(dialog.getByLabel('预共享密钥', { exact: true })).toHaveValue('AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=');
+  await expect(dialog.getByRole('note')).toContainText('DNS 未应用');
+  await dialog.getByRole('button', { name: '保存并应用' }).click();
+  await cardMenu(page, 'custom-name', '编辑端点');
+  dialog = page.getByRole('dialog', { name: '编辑端点', exact: true });
+  await expect(dialog.getByLabel('MTU', { exact: true })).toHaveValue('1380');
+  await expect(dialog.getByLabel('保活间隔（秒）', { exact: true })).toHaveValue('25');
+});
+
+test('multiple files preview without saving, resolve collisions, and import all peers together', async ({ page }) => {
+  await page.getByRole('button', { name: '导入配置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '导入 WireGuard 配置', exact: true });
+  const multiplePeers = importConf + `[Peer]
+PublicKey = BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=
+Endpoint = peer-two.example:51820
+AllowedIPs = 10.67.0.0/16
+`;
+  await dialog.getByLabel('选择 WireGuard 配置文件', { exact: true }).setInputFiles([configFile('home.conf', multiplePeers), configFile('home.ini')]);
+  await expect(dialog.getByRole('article')).toHaveCount(2);
+  await expect(dialog.getByRole('article').first()).toContainText('2 个 Peer');
+  await expect(dialog.getByRole('button', { name: '确认导入并应用' })).toBeDisabled();
+  await expect(page.getByRole('article', { name: '端点 home', exact: true })).toHaveCount(0);
+  await dialog.getByRole('textbox', { name: '端点名称', exact: true }).nth(1).fill('office');
+  await dialog.getByRole('button', { name: '确认导入并应用' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('article', { name: '端点 home', exact: true })).toBeVisible();
+  await expect(page.getByRole('article', { name: '端点 office', exact: true })).toBeVisible();
+  await cardMenu(page, 'home', '编辑端点');
+  await expect(page.getByRole('dialog').getByRole('textbox', { name: '公钥', exact: true })).toHaveCount(2);
+});
+
+test('a malformed file blocks the batch without exposing secret data or saving valid siblings', async ({ page }) => {
+  await page.getByRole('button', { name: '导入配置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '导入 WireGuard 配置', exact: true });
+  await dialog.getByLabel('选择 WireGuard 配置文件', { exact: true }).setInputFiles([configFile('good.conf'), configFile('bad.conf', importConf.replace('10.66.0.2/32, fd66::2/128', 'SECRET'))]);
+  await expect(dialog.getByRole('alert')).toContainText('IP/前缀');
+  await expect(dialog.getByRole('button', { name: '确认导入并应用' })).toBeDisabled();
+  await expect(dialog).not.toContainText('SECRET');
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByRole('article', { name: '端点 good', exact: true })).toHaveCount(0);
+});
+
+test('failed batch save retains preview and never claims success or retries automatically', async ({ page }) => {
+  await page.getByRole('button', { name: '导入配置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '导入 WireGuard 配置', exact: true });
+  await dialog.getByLabel('选择 WireGuard 配置文件', { exact: true }).setInputFiles(configFile('home.conf'));
+  await page.evaluate(() => window.dispatchEvent(new Event('fixture-library-external-change')));
+  await dialog.getByRole('button', { name: '确认导入并应用' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('已变化');
+  await expect(dialog.getByRole('textbox', { name: '端点名称', exact: true })).toHaveValue('home');
+  await expect(page.getByRole('article', { name: '端点 home', exact: true })).toHaveCount(0);
 });

@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import * as Dialog from '$lib/components/ui/dialog';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
   import FieldSelect from '$lib/components/ui/select/field-select.svelte';
   import { endpointForms } from './endpoint-forms';
   import { Button } from '$lib/components/ui/button';
+  import EndpointImportDialog from './EndpointImportDialog.svelte';
   import { getAppErrorMessage } from '$lib/services/core';
   import { loadUserEndpoints, saveUserEndpoints, type UserEndpoint, type UserEndpointLibrary } from '$lib/features/endpoints/library';
   let { onSaved, onChange, disabled = false, busy = $bindable(false) }: { onSaved: () => void; onChange: (rows: UserEndpoint[]) => void; disabled?: boolean; busy?: boolean } = $props();
@@ -17,6 +18,8 @@
   let deleting = $state<string | null>(null);
   let editorOpen = $state(false);
   let deleteOpen = $state(false);
+  let importOpen = $state(false);
+  let attempted = $state(false);
   const protocolOptions = $derived((library?.protocols ?? []).filter(protocol => endpointForms[protocol.type]).map(protocol => ({ value: protocol.type, label: protocol.label })));
   const formAdapter = $derived(draft ? endpointForms[draft.protocol.type] : undefined);
   function changeProtocol(protocol: string) {
@@ -38,7 +41,7 @@
   onMount(() => { alive = true; void refresh(); return () => { alive = false; draft = null; library = null; }; });
   export async function edit(tag: string | null = null) {
     if (busy || disabled) return;
-    originalTag = tag; editorOpen = true; draft = null; deleting = null; notice = '';
+    originalTag = tag; editorOpen = true; draft = null; deleting = null; notice = ''; attempted = false;
     await refresh();
     if (!library || error || !alive) return;
     const endpoint = tag === null ? endpointForms[protocolOptions[0]?.value]?.create() : library.endpoints.find(row => row.tag === tag);
@@ -47,6 +50,17 @@
     originalTag = tag;
     draft = structuredClone($state.snapshot(endpoint));
     deleting = null; notice = '';
+  }
+  export async function importFiles() {
+    if (busy || disabled) return;
+    notice = ''; await refresh();
+    if (!library || error || !alive) return;
+    if (!library.protocols.some(protocol => protocol.type === 'wireguard')) { error = '当前客户端不支持 WireGuard 配置导入'; return; }
+    importOpen = true;
+  }
+  function imported(next: UserEndpointLibrary) {
+    library = next; onChange(next.endpoints);
+    notice = '配置已导入；内核运行时已应用，未运行时将在下次启动生效。'; onSaved();
   }
   export async function remove(tag: string) {
     if (busy || disabled) return;
@@ -63,6 +77,15 @@
       if (!draft) return;
       const row = structuredClone($state.snapshot(draft));
       row.tag = row.tag.trim();
+      attempted = true;
+      if (!row.tag || new TextEncoder().encode(row.tag).length > 128) { error = '端点名称须为 1～128 字节'; return; }
+      const issue = endpointForms[row.protocol.type]?.validate(row)[0];
+      if (issue) {
+        error = issue.message;
+        await tick();
+        document.getElementById('endpoint-editor-form')?.querySelector<HTMLElement>(`[name="${issue.field}"]`)?.focus();
+        return;
+      }
       if (endpoints.some(endpoint => endpoint.tag === row.tag && endpoint.tag !== originalTag)) { error = '用户端点名称不能重复'; return; }
       endpoints = originalTag === null ? [...endpoints, row] : endpoints.map(endpoint => endpoint.tag === originalTag ? row : endpoint);
     }
@@ -89,8 +112,9 @@
     <Dialog.Body>
       {#if error}<p role="alert" class="error">{error}</p>{/if}
       {#if draft}
-        <form id="endpoint-editor-form" onsubmit={event => { event.preventDefault(); void commit(); }}>
+        <form id="endpoint-editor-form" novalidate onsubmit={event => { event.preventDefault(); void commit(); }}>
           <fieldset disabled={busy || disabled} class="grid min-w-0 gap-4 border-0 p-0">
+            {#if formAdapter}{@const Importer = formAdapter.importer}<Importer bind:endpoint={draft} disabled={busy || disabled} bind:busy onFilled={() => { error = ''; attempted = false; }} />{/if}
             <label class="grid gap-1.5 text-xs"><span>端点名称 <span class="text-destructive" aria-hidden="true">*</span></span><Input required maxlength={128} bind:value={draft.tag} disabled={busy || disabled} autocomplete="off" placeholder="例如：家庭网络" /></label>
             <div class="grid gap-1.5 text-xs"><span id="endpoint-protocol-label">协议</span><FieldSelect value={draft.protocol.type} onValueChange={changeProtocol} options={protocolOptions} disabled={busy || disabled || originalTag !== null} aria-labelledby="endpoint-protocol-label" /></div>
             <div class="flex flex-wrap items-center gap-5 text-xs">
@@ -102,7 +126,7 @@
             </div>
             {#if formAdapter}
               {@const Form = formAdapter.component}
-              {#key draft}<Form bind:endpoint={draft} disabled={busy || disabled} />{/key}
+              {#key draft}<Form bind:endpoint={draft} disabled={busy || disabled} {attempted} />{/key}
             {/if}
           </fieldset>
         </form>
@@ -114,6 +138,7 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+{#if importOpen && library}<EndpointImportDialog bind:open={importOpen} bind:busy {library} onSaved={imported} />{/if}
 <Dialog.Root open={deleteOpen} onOpenChange={closeDelete}>
   <Dialog.Content class="sm:max-w-[440px]" showCloseButton={!busy} onEscapeKeydown={event => { if (busy) event.preventDefault(); }} onInteractOutside={event => { if (busy) event.preventDefault(); }}>
     <Dialog.Header><Dialog.Title>删除端点 {deleting}？</Dialog.Title><Dialog.Description>此端点将从所有配置中移除，相关连接可能中断。</Dialog.Description></Dialog.Header>

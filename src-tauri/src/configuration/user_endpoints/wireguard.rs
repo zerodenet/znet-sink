@@ -22,7 +22,8 @@ fn key(value: &Value) -> bool {
         .and_then(|s| STANDARD.decode(s).ok())
         .is_some_and(|bytes| bytes.len() == 32)
 }
-pub(super) fn validate(protocol: &Value) -> AppResult<()> {
+pub(super) fn validate(row: &Value) -> AppResult<()> {
+    let protocol = &row["protocol"];
     if !key(&protocol["private_key"]) {
         return Err(invalid("WireGuard 私钥必须为 Base64 编码的 32 字节密钥"));
     }
@@ -31,8 +32,24 @@ pub(super) fn validate(protocol: &Value) -> AppResult<()> {
         .is_some_and(|v| !v.is_empty() && v.iter().all(cidr))
     {
         return Err(invalid(
-            "WireGuard 本机地址必须为非空的 IPv4/IPv6 CIDR 列表",
+            "WireGuard 本机隧道地址请填写 Address 中的 IP/前缀，例如 10.66.0.2/32；不能填写密钥",
         ));
+    }
+    if let Some(mtu) = protocol.get("mtu") {
+        let ipv6 = protocol["addresses"].as_array().is_some_and(|values| {
+            values
+                .iter()
+                .any(|value| value.as_str().is_some_and(|value| value.contains(':')))
+        });
+        let min = if ipv6 { 1280 } else { 68 };
+        if !mtu
+            .as_u64()
+            .is_some_and(|value| (min..=65488).contains(&value))
+        {
+            return Err(invalid(
+                "WireGuard MTU 超出允许范围（IPv4 最小 68，IPv6 最小 1280，最大 65488）",
+            ));
+        }
     }
     let peers = protocol["peers"]
         .as_array()
@@ -40,11 +57,31 @@ pub(super) fn validate(protocol: &Value) -> AppResult<()> {
         .ok_or_else(|| invalid("WireGuard 至少需要一个 peer"))?;
     let mut public_keys = HashSet::new();
     for peer in peers {
+        if row["directions"]["outbound"] != false
+            && row.get("listen").is_none()
+            && peer.get("endpoint").is_none()
+        {
+            return Err(invalid(
+                "仅启用出站时请为每个 Peer 配置远端地址（Endpoint）",
+            ));
+        }
         if !key(&peer["public_key"]) {
             return Err(invalid("Peer 公钥必须为 Base64 编码的 32 字节密钥"));
         }
         if !public_keys.insert(peer["public_key"].as_str().unwrap()) {
             return Err(invalid("Peer 公钥不能重复"));
+        }
+        if peer
+            .get("pre_shared_key")
+            .is_some_and(|value| !value.is_null() && !key(value))
+        {
+            return Err(invalid("Peer 预共享密钥必须为 Base64 编码的 32 字节密钥"));
+        }
+        if peer
+            .get("keepalive_secs")
+            .is_some_and(|value| !value.as_u64().is_some_and(|value| value <= 65535))
+        {
+            return Err(invalid("Peer 保活间隔必须为 0～65535 秒的整数"));
         }
         if !peer["allowed_ips"]
             .as_array()
