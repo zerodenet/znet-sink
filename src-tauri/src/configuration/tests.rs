@@ -42,7 +42,8 @@ fn composition_preserves_source_and_reports_order_without_values() {
             "global_dns",
             "urltest_override",
             "saved_selections",
-            "bypass"
+            "bypass",
+            "endpoint_dns"
         ]
     );
     assert_eq!(candidate.report.layers[3].changed_paths, Vec::<&str>::new());

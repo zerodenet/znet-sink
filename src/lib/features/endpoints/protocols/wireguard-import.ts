@@ -46,7 +46,18 @@ export function parseWireGuardConfig(text: string, filename: string): WireGuardI
         case 'listenport':
           endpoint.listen = { address: '0.0.0.0', port: number(value, index + 1, 65535) };
           endpoint.directions = { inbound: true, outbound: true }; break;
-        case 'dns': warnings.add('文件中的 DNS 未应用；请在客户端 DNS 设置中配置。'); break;
+        case 'dns': {
+          endpoint.dns ??= { servers: [], search_domains: [], use_as_default: true };
+          for (const item of parseAddressList(value)) {
+            if (validIp(item)) { if (!endpoint.dns.servers.includes(item)) endpoint.dns.servers.push(item); }
+            else {
+              const name = item.replace(/\.$/, '').toLowerCase();
+              if (name.length > 253 || !name.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) fail(index + 1, 'DNS 必须填写服务器 IP 或有效搜索域。');
+              if (!endpoint.dns.search_domains.includes(name)) endpoint.dns.search_domains.push(name);
+            }
+          }
+          break;
+        }
         case 'saveconfig': warnings.add('SaveConfig 未导入；客户端统一保存端点配置。'); break;
         case 'table': case 'fwmark': case 'preup': case 'postup': case 'predown': case 'postdown':
           fail(index + 1, '此配置包含系统路由、标记或启动脚本，无法作为端点完整导入。请移除相关字段，并在客户端配置路由。'); break;
@@ -64,6 +75,8 @@ export function parseWireGuardConfig(text: string, filename: string): WireGuardI
     }
   }
   if (!seenInterface) throw new Error('未找到 [Interface]；请选择 WireGuard .conf 配置文件。');
+  if (endpoint.dns && !endpoint.dns.servers.length) throw new Error('DNS 字段需要至少一个 DNS 服务器 IP。');
+  if (endpoint.dns?.search_domains.length) warnings.add('搜索域已保留；短主机名的自动补全仍取决于系统，完整域名会使用导入的 DNS。');
   const issue = validateWireGuardEndpoint(endpoint)[0];
   if (issue) throw new Error(issue.message);
   return { endpoint, warnings: [...warnings] };

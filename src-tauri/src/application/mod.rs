@@ -149,6 +149,24 @@ pub fn run() {
             // Single-instance admission is complete; a concurrent second launch
             // must never clear the first client's active proxy marker.
             system_proxy_guard::cleanup_on_startup();
+            // Only the admitted sole GUI may reset a previous lifetime's
+            // capture preference. Do this before the UI or auto-connect can
+            // consume a stale ON value after a crash/updater relaunch.
+            let state = app.state::<AppState>();
+            let reset = (|| {
+                let mut config = crate::services::common::lock(state.app_config(), "app_config")?;
+                crate::capture::intent::begin_lifetime(
+                    &mut config,
+                    &crate::services::app_config_store::default_config_path()?,
+                )
+            })();
+            if let Err(error) = reset {
+                state.runtime_host().record_error(error.message.clone());
+                crate::services::file_logger::line(&format!(
+                    "startup: TUN kept OFF; failed to persist reset: {}",
+                    error.message
+                ));
+            }
             crate::services::file_logger::line("runtime: setup begin");
             #[cfg(target_os = "macos")]
             crate::services::plugins::notification::install_foreground_delegate();

@@ -2,10 +2,11 @@
   import { untrack } from 'svelte';
   import WireGuardPeerFields from './WireGuardPeerFields.svelte';
   import WireGuardField from './WireGuardField.svelte';
+  import EndpointDnsFields from './EndpointDnsFields.svelte';
   import { Button } from '$lib/components/ui/button';
   import type { UserEndpoint } from '$lib/features/endpoints/library';
   import { parseAddressList, validateWireGuardEndpoint, type WireGuardProtocol } from '$lib/features/endpoints/protocols/wireguard';
-  let { endpoint = $bindable(), disabled = false, attempted = false }: { endpoint: UserEndpoint; disabled?: boolean; attempted?: boolean } = $props();
+  let { endpoint = $bindable(), disabled = false, attempted = false, dnsDefaultChoice = true }: { endpoint: UserEndpoint; disabled?: boolean; attempted?: boolean; dnsDefaultChoice?: boolean } = $props();
   const protocol = $derived(endpoint.protocol as WireGuardProtocol);
   const issues = $derived(validateWireGuardEndpoint(endpoint));
   const issue = (field: string) => issues.find(row => row.field === field)?.message ?? '';
@@ -28,4 +29,5 @@
     <WireGuardPeerFields bind:peer={protocol.peers[index]} {index} {disabled} {attempted} {issues} removable={protocol.peers.length > 1} onRemove={() => protocol.peers = protocol.peers.filter((_, i) => i !== index)} />
   {/each}
   <Button type="button" variant="outline" size="sm" {disabled} onclick={() => protocol.peers.push({ public_key: '', allowed_ips: [] })}>添加 Peer</Button>
+  <EndpointDnsFields bind:endpoint {disabled} {attempted} error={issue} allowDefaultChoice={dnsDefaultChoice}/>
 </div>

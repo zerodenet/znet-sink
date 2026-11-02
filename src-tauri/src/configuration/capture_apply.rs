@@ -8,7 +8,9 @@ use serde_json::{json, Value};
 use std::{future::Future, time::Duration};
 
 mod parameters;
+mod preferences;
 use parameters::{matches, matches_plan};
+pub(crate) use preferences::apply_endpoint_preferences;
 
 pub(crate) struct Snapshot {
     pub identity: KernelRuntimeIdentity,

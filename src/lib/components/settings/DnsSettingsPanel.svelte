@@ -1,6 +1,7 @@
 <script lang="ts">
   import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
   let profileSnapshot = $state<ProfileSettings | null>(null);
+  const importedDns = $derived(profileSnapshot?.settings.userEndpoints?.find(row => row.enabled !== false && row.directions?.outbound !== false && row.dns?.use_as_default));
   async function loadGlobalDnsSettings() {
     profileSnapshot = await getProfileSettings();
     const source = profileSnapshot.settings.dns;
@@ -862,6 +863,7 @@
   <Button variant="outline" size="sm" onclick={restoreDnsSource} disabled={saving || !isLocallyEdited(profileSnapshot, 'dns')}>恢复配置值</Button>
 </div>
 
+{#if importedDns}<p role="status" class="state compact">当前默认 DNS 来自端点「{importedDns.tag}」（{importedDns.dns?.servers.join(', ')}）。下方为基础 DNS 配置；停用端点后自动恢复。可在端点编辑中切换默认 DNS 来源。</p>{/if}
 <div class="panel-head">
   <div>
     <h2>域名解析</h2>

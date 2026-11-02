@@ -5,6 +5,7 @@ pub(crate) mod capture_apply;
 pub(crate) mod composition;
 pub(crate) mod dns;
 pub(crate) mod dns_rule_sets;
+pub(crate) mod endpoint_dns;
 pub(crate) mod persistence;
 mod report;
 pub(crate) mod route_integrity;

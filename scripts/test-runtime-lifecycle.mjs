@@ -113,4 +113,15 @@ assert.ok(
   'system-proxy control should explain that it does not stop the kernel or close existing flows',
 );
 
+assert.ok(
+  appRuntime.indexOf('crate::capture::intent::begin_lifetime(') > appRuntime.indexOf('.setup(')
+    && appRuntime.indexOf('crate::capture::intent::begin_lifetime(') < appRuntime.indexOf('if !core_config.auto_start'),
+  'only the admitted GUI resets stale TUN intent, before automatic kernel/proxy startup',
+);
+assert.ok(
+  read('src-tauri/src/commands/app_config.rs').includes('capture_apply::apply_endpoint_preferences(')
+    && read('src-tauri/src/configuration/capture_apply/preferences.rs').indexOf('Box::pin(apply(')
+      < read('src-tauri/src/configuration/capture_apply/preferences.rs').indexOf('app_config::replace(state, next.clone())'),
+  'endpoint imports and DNS toggles use the actual capture-aware apply before persisting preferences',
+);
 console.log('runtime lifecycle tests passed');

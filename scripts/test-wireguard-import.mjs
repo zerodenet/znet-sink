@@ -38,7 +38,8 @@ PersistentKeepalive = off`, 'home.conf');
   assert.equal(endpoint.protocol.peers[0].keepalive_secs, 25);
   assert.deepEqual(endpoint.protocol.peers[1].allowed_ips, ['10.68.0.0/16', 'fd68::/64']);
   assert.equal(endpoint.protocol.peers[1].keepalive_secs, 0);
-  assert.match(warnings.join(), /DNS 未应用/);
+  assert.equal(warnings.length, 0);
+  assert.deepEqual(endpoint.dns, {servers:['1.1.1.1'], search_domains:[], use_as_default:true});
   assert.equal('dns' in endpoint.protocol, false);
 });
 
@@ -71,4 +72,28 @@ test('file reads bound size and type and do not expose native error contents', a
   assert.match((await readWireGuardFile(new File(['x'.repeat(256 * 1024 + 1)], 'huge.conf'))).error, /256 KiB/);
   const unreadable = { name: 'home.conf', size: 10, text: async () => { throw new Error('SECRET'); } };
   assert.equal((await readWireGuardFile(unreadable)).error, '文件读取失败，请重新选择。');
+});
+
+
+test('DNS server lists and search domains are imported without kernel protocol pollution', () => {
+  const {endpoint, warnings} = parseWireGuardConfig(conf.replace('DNS = 1.1.1.1', 'DNS = 10.66.0.1, fd66::53, corp.example.\nDNS = 10.66.0.1'), 'dns.conf');
+  assert.deepEqual(endpoint.dns, {servers:['10.66.0.1','fd66::53'],search_domains:['corp.example'],use_as_default:true});
+  assert.equal('dns' in endpoint.protocol, false);
+  assert.match(warnings.join(), /搜索域已保留/);
+  assert.throws(() => parseWireGuardConfig(conf.replace('DNS = 1.1.1.1','DNS = bad/domain'), 'dns.conf'), /DNS/);
+});
+
+test('batch DNS defaults are deterministic and replace only the prior DNS selection', async () => {
+  const {chooseImportedDns, mergeImportedEndpoints} = await import('../src/lib/features/endpoints/dns.ts');
+  const home=parseWireGuardConfig(conf,'home.conf').endpoint;
+  const office=parseWireGuardConfig(conf,'office.conf').endpoint;
+  const prior=parseWireGuardConfig(conf,'prior.conf').endpoint;
+  const rows=chooseImportedDns([home,office]);
+  assert.equal(rows[0].dns.use_as_default,true);
+  assert.equal(rows[1].dns.use_as_default,false);
+  const merged=mergeImportedEndpoints([prior],rows);
+  assert.equal(merged[0].dns.use_as_default,false);
+  assert.equal(merged[1].dns.use_as_default,true);
+  assert.equal(prior.dns.use_as_default,true);
+  assert.deepEqual(merged[0].protocol,prior.protocol);
 });

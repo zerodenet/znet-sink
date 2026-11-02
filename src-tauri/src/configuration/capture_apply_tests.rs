@@ -303,6 +303,26 @@ async fn rule_edits_keep_capture_live_but_endpoint_replacement_rebuilds_it() {
 }
 
 #[tokio::test]
+async fn imported_dns_change_rebuilds_active_capture_without_changing_tun_parameters() {
+    let backend = Fake::new(true, "");
+    let old = json!({"test":"old","runtime":{"dns":{"default_server":"base"}}});
+    let next = json!({"test":"new","runtime":{"dns":{"default_server":"imported"}}});
+    apply(
+        &backend,
+        &old,
+        &next,
+        &params("10.77.0.1/24"),
+        &params("10.77.0.1/24"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        backend.0.lock().unwrap().calls,
+        vec!["stop", "apply:new", "start:10.77.0.1/24"]
+    );
+}
+
+#[tokio::test]
 async fn optional_capture_facts_are_only_required_when_mutating_capture() {
     for changed in [false, true] {
         let backend = Fake::new(true, "");

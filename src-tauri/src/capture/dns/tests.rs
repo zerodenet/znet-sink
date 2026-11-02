@@ -77,6 +77,31 @@ fn recommended_dns_remains_independent_after_host_capture() {
 }
 
 #[test]
+fn imported_private_dns_uses_endpoint_and_keeps_bootstrap_independent_for_capture() {
+    let mut app = crate::models::app_config::AppConfig::default();
+    app.dns.enabled = false;
+    app.overrides.dns = true;
+    app.user_endpoints = vec![json!({
+        "tag":"home","enabled":true,"directions":{"inbound":false,"outbound":true},
+        "protocol":{"type":"wireguard","peers":[{"allowed_ips":["0.0.0.0/0"]}]},
+        "dns":{"servers":["10.77.0.1"],"use_as_default":true}
+    })];
+    let dns = super::preflight::effective_dns(&app, &json!({})).unwrap();
+    explicit_upstreams(&dns, "10.66.0.2").unwrap();
+    let default = dns["default_server"].as_str().unwrap();
+    assert_eq!(dns["servers"][default]["host"], "10.77.0.1");
+    assert_eq!(dns["servers"][default]["detour"], "home");
+    let node = dns["policy"]["node_server"].as_str().unwrap();
+    assert_ne!(node, default);
+    assert!(dns["servers"][node].get("detour").is_none());
+    assert_ne!(dns["servers"][node]["type"], "system");
+    // The imported server itself must also pass the actual host-capture gate.
+    app.user_endpoints[0]["dns"]["servers"] = json!(["10.66.0.2"]);
+    let dns = super::preflight::effective_dns(&app, &json!({})).unwrap();
+    assert!(explicit_upstreams(&dns, "10.66.0.2").is_err());
+}
+
+#[test]
 fn independent_literal_doh_profile_is_preserved_and_accepted_for_capture() {
     let value = json!({
         "servers":{"alidns":{"type":"doh","host":"223.5.5.5","port":443,

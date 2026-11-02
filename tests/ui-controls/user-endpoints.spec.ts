@@ -232,7 +232,8 @@ test('file filling replaces visible fields, preserves the name and retains optio
   await expect(dialog.getByLabel('MTU', { exact: true })).toHaveValue('1380');
   await expect(dialog.getByLabel('保活间隔（秒）', { exact: true })).toHaveValue('25');
   await expect(dialog.getByLabel('预共享密钥', { exact: true })).toHaveValue('AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=');
-  await expect(dialog.getByRole('note')).toContainText('DNS 未应用');
+  await expect(dialog.getByRole('textbox', { name: 'DNS 服务器', exact: true })).toHaveValue('1.1.1.1');
+  await expect(dialog.getByRole('switch', { name: '用作默认 DNS', exact: true })).toBeChecked();
   await dialog.getByRole('button', { name: '保存并应用' }).click();
   await cardMenu(page, 'custom-name', '编辑端点');
   dialog = page.getByRole('dialog', { name: '编辑端点', exact: true });
@@ -242,7 +243,7 @@ test('file filling replaces visible fields, preserves the name and retains optio
 
 test('multiple files preview without saving, resolve collisions, and import all peers together', async ({ page }) => {
   await page.getByRole('button', { name: '导入配置', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '导入 WireGuard 配置', exact: true });
+  const dialog = page.getByRole('dialog', { name: '创建端点', exact: true });
   const multiplePeers = importConf + `[Peer]
 PublicKey = BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=
 Endpoint = peer-two.example:51820
@@ -264,7 +265,7 @@ AllowedIPs = 10.67.0.0/16
 
 test('a malformed file blocks the batch without exposing secret data or saving valid siblings', async ({ page }) => {
   await page.getByRole('button', { name: '导入配置', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '导入 WireGuard 配置', exact: true });
+  const dialog = page.getByRole('dialog', { name: '创建端点', exact: true });
   await dialog.getByLabel('选择 WireGuard 配置文件', { exact: true }).setInputFiles([configFile('good.conf'), configFile('bad.conf', importConf.replace('10.66.0.2/32, fd66::2/128', 'SECRET'))]);
   await expect(dialog.getByRole('alert')).toContainText('IP/前缀');
   await expect(dialog.getByRole('button', { name: '确认导入并应用' })).toBeDisabled();
@@ -275,11 +276,63 @@ test('a malformed file blocks the batch without exposing secret data or saving v
 
 test('failed batch save retains preview and never claims success or retries automatically', async ({ page }) => {
   await page.getByRole('button', { name: '导入配置', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '导入 WireGuard 配置', exact: true });
+  const dialog = page.getByRole('dialog', { name: '创建端点', exact: true });
   await dialog.getByLabel('选择 WireGuard 配置文件', { exact: true }).setInputFiles(configFile('home.conf'));
   await page.evaluate(() => window.dispatchEvent(new Event('fixture-library-external-change')));
   await dialog.getByRole('button', { name: '确认导入并应用' }).click();
   await expect(dialog.getByRole('alert')).toContainText('已变化');
   await expect(dialog.getByRole('textbox', { name: '端点名称', exact: true })).toHaveValue('home');
   await expect(page.getByRole('article', { name: '端点 home', exact: true })).toHaveCount(0);
+});
+
+
+test('create entry parses pasted configuration and previews DNS before any save', async ({ page }) => {
+  await page.getByRole('button', { name: '创建端点', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '创建端点', exact: true });
+  await dialog.getByLabel('创建端点方式', { exact: true }).getByText('粘贴配置', { exact: true }).click();
+  await dialog.getByRole('textbox', { name: '端点名称', exact: true }).fill('pasted-home');
+  await dialog.getByLabel('WireGuard 配置文本', { exact: true }).fill(importConf.replace('DNS = 1.1.1.1', 'DNS = 10.66.0.1, fd66::53'));
+  await dialog.getByRole('button', { name: '解析并预览', exact: true }).click();
+  const preview = dialog.getByRole('article');
+  await expect(preview).toContainText('10.66.0.1, fd66::53');
+  await expect(preview.getByRole('switch')).toBeChecked();
+  await expect(page.getByRole('article', { name: '端点 pasted-home', exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: '确认导入并应用', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await cardMenu(page, 'pasted-home', '编辑端点');
+  const edit = page.getByRole('dialog', { name: '编辑端点', exact: true });
+  await expect(edit.getByRole('textbox', { name: 'DNS 服务器', exact: true })).toHaveValue('10.66.0.1, fd66::53');
+  await expect(edit.getByRole('switch', { name: '用作默认 DNS', exact: true })).toBeChecked();
+});
+
+test('create and toolbar shortcuts share the same file preview and choose a single DNS source', async ({ page }) => {
+  await page.getByRole('button', { name: '创建端点', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '创建端点', exact: true });
+  await dialog.getByLabel('创建端点方式', { exact: true }).getByText('导入文件', { exact: true }).click();
+  await dialog.getByLabel('选择 WireGuard 配置文件', { exact: true }).setInputFiles([configFile('home.conf'), configFile('office.conf', importConf.replace('1.1.1.1', '10.67.0.1'))]);
+  await expect(dialog.getByRole('article').nth(0).getByRole('switch')).toBeChecked();
+  await expect(dialog.getByRole('article').nth(1).getByRole('switch')).not.toBeChecked();
+  await dialog.getByRole('article').nth(1).getByRole('switch').click();
+  await expect(dialog.getByRole('article').nth(0).getByRole('switch')).not.toBeChecked();
+  await dialog.getByRole('button', { name: '确认导入并应用', exact: true }).click();
+  await cardMenu(page, 'home', '编辑端点');
+  await expect(page.getByRole('dialog').getByRole('switch', { name: '用作默认 DNS', exact: true })).not.toBeChecked();
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+  await cardMenu(page, 'office', '编辑端点');
+  await expect(page.getByRole('dialog').getByRole('switch', { name: '用作默认 DNS', exact: true })).toBeChecked();
+});
+
+test('invalid pasted input retains the text for correction and creates nothing', async ({ page }) => {
+  await page.getByRole('button', { name: '创建端点', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '创建端点', exact: true });
+  await dialog.getByLabel('创建端点方式', { exact: true }).getByText('粘贴配置', { exact: true }).click();
+  const text = dialog.getByLabel('WireGuard 配置文本', { exact: true });
+  const invalid = importConf.replace('DNS = 1.1.1.1','DNS = bad/domain');
+  await text.fill(invalid);
+  await dialog.getByRole('button', { name: '解析并预览', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('DNS');
+  await expect(text).toHaveValue(invalid);
+  await expect(dialog.getByRole('button', { name: '确认导入并应用', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByRole('article', { name: '端点 粘贴配置', exact: true })).toHaveCount(0);
 });

@@ -33,6 +33,10 @@ export function validateWireGuardEndpoint(endpoint: UserEndpoint): EndpointField
   const issues: EndpointFieldIssue[] = [];
   const directions = endpoint.directions ?? { inbound: false, outbound: true };
   const check = (valid: boolean, field: string, message: string) => { if (!valid) issues.push({ field, message }); };
+  if (endpoint.dns) {
+    check(endpoint.dns.servers.length > 0 && endpoint.dns.servers.length <= 16 && endpoint.dns.servers.every(validIp), 'dns_servers', 'DNS 需要 1～16 个服务器 IP。');
+    check(endpoint.dns.search_domains.length <= 32 && endpoint.dns.search_domains.every(name => name.length <= 253 && name.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label))), 'dns_search_domains', '请填写有效的 DNS 搜索域。');
+  }
   check(validWireGuardKey(p.private_key), 'private_key', '请填写配置中 PrivateKey 的 Base64 密钥（32 字节）。');
   check(p.addresses.length > 0 && p.addresses.every(validCidr), 'addresses', '请填写配置中 Address 的 IP/前缀，例如 10.66.0.2/32；这里不能填写密钥。');
   const minMtu = p.addresses.some(address => address.includes(':')) ? 1280 : 68;

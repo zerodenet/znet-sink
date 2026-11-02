@@ -34,11 +34,12 @@ pub async fn gui_endpoint_details(
 
 #[tauri::command]
 pub async fn gui_endpoint_control(
+    app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     input: ManagedInput,
 ) -> AppResult<Value> {
     let _operation = state.proxy_config_operation().lock().await;
-    managed::control(state.inner(), input, options(state.inner())?).await
+    managed::control(app_handle, state.clone(), input, options(state.inner())?).await
 }
 
 #[derive(serde::Serialize)]

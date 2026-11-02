@@ -8,6 +8,8 @@ Only the client's current managed child is eligible. Before the first resolver c
 
 The client reads effective profile/default DNS policy on every reconciliation. Failed installation is retained as an error and does not continually re-prompt. TUN recovery retries it. Disabling TUN or stopping the managed runtime removes the host DNS entry before stopping TUN.
 
+Each newly admitted GUI lifetime starts with TUN switched off, including after an abrupt exit or updater relaunch. This reset runs after single-instance admission and before auto-start/UI settings are consumed; failure to persist still leaves the in-memory switch off. Address, MTU and other network parameters are retained. Normal exit still confirms the owned child's TUN stop before stopping the child; clearing the preference is not evidence that a device has closed.
+
 ## Platforms
 
 | Platform | Entry | Cleanup and restrictions |

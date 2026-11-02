@@ -19,7 +19,7 @@ pub struct Directions {
     pub outbound: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     SetState {
@@ -41,7 +41,7 @@ pub enum Persistence {
     SourceFile,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ControlInput {
     pub endpoint_id: String,

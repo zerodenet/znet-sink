@@ -5,6 +5,7 @@ export type UserEndpoint = {
   tag: string;
   enabled?: boolean;
   directions?: { inbound: boolean; outbound: boolean };
+  dns?: { servers: string[]; search_domains: string[]; use_as_default: boolean };
   protocol: { type: string; [key: string]: unknown };
   [key: string]: unknown;
 };

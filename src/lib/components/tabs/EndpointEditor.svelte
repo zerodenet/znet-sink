@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import * as Dialog from '$lib/components/ui/dialog';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
@@ -18,7 +19,7 @@
   let deleting = $state<string | null>(null);
   let editorOpen = $state(false);
   let deleteOpen = $state(false);
-  let importOpen = $state(false);
+  let creationMode = $state<'manual' | 'file' | 'paste'>('manual');
   let attempted = $state(false);
   let returnFocus: HTMLElement | null = null;
   function restoreFocus(event: Event) {
@@ -46,6 +47,7 @@
   export async function edit(tag: string | null = null, trigger?: HTMLElement) {
     if (busy || disabled) return;
     returnFocus = trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    creationMode = 'manual';
     originalTag = tag; editorOpen = true; draft = null; deleting = null; notice = ''; attempted = false;
     await refresh();
     if (!library || error || !alive) return;
@@ -56,15 +58,12 @@
     draft = structuredClone($state.snapshot(endpoint));
     deleting = null; notice = '';
   }
-  export async function importFiles() {
-    if (busy || disabled) return;
-    notice = ''; await refresh();
-    if (!library || error || !alive) return;
-    if (!library.protocols.some(protocol => protocol.type === 'wireguard')) { error = '当前客户端不支持 WireGuard 配置导入'; return; }
-    importOpen = true;
+  export async function importFiles(trigger?: HTMLElement) {
+    await edit(null, trigger);
+    if (library?.protocols.some(protocol => protocol.type === 'wireguard')) creationMode = 'file';
   }
   function imported(next: UserEndpointLibrary) {
-    library = next; onChange(next.endpoints);
+    library = next; onChange(next.endpoints); editorOpen = false; draft = null;
     notice = '配置已导入；内核运行时已应用，未运行时将在下次启动生效。'; onSaved();
   }
   export async function remove(tag: string) {
@@ -93,10 +92,11 @@
       }
       if (endpoints.some(endpoint => endpoint.tag === row.tag && endpoint.tag !== originalTag)) { error = '用户端点名称不能重复'; return; }
       endpoints = originalTag === null ? [...endpoints, row] : endpoints.map(endpoint => endpoint.tag === originalTag ? row : endpoint);
+      if (row.dns?.use_as_default) endpoints = endpoints.map(endpoint => endpoint.tag !== row.tag && endpoint.dns?.use_as_default ? { ...endpoint, dns: { ...endpoint.dns, use_as_default: false } } : endpoint);
     }
     busy = true; error = ''; notice = '';
     try {
-      const next = await saveUserEndpoints(library.revision, endpoints);
+      const next = await saveUserEndpoints(library.revision, $state.snapshot(endpoints));
       if (!alive) return;
       library = next; onChange(next.endpoints); draft = null; deleting = null; editorOpen = false; deleteOpen = false;
       notice = '已保存；内核运行时已应用，未运行时将在下次启动生效。'; onSaved();
@@ -112,8 +112,12 @@
   <Dialog.Content class="sm:max-w-[560px]" showCloseButton={!busy} onCloseAutoFocus={restoreFocus} onEscapeKeydown={event => { if (busy) event.preventDefault(); }} onInteractOutside={event => { if (busy) event.preventDefault(); }}>
     <Dialog.Header>
       <Dialog.Title>{originalTag === null ? '创建端点' : '编辑端点'}</Dialog.Title>
-      <Dialog.Description>自动加入所有配置，切换配置后仍保留。</Dialog.Description>
+      <Dialog.Description>自动加入所有配置，切换配置后仍保留。文件和粘贴配置都会先解析预览，再确认创建。</Dialog.Description>
+      {#if originalTag === null}<SegmentedControl.Root value={creationMode} onValueChange={value => creationMode = value as typeof creationMode} disabled={busy || disabled} aria-label="创建端点方式"><SegmentedControl.Item value="manual">手动填写</SegmentedControl.Item><SegmentedControl.Item value="file" disabled={!library?.protocols.some(protocol => protocol.type === 'wireguard')}>导入文件</SegmentedControl.Item><SegmentedControl.Item value="paste" disabled={!library?.protocols.some(protocol => protocol.type === 'wireguard')}>粘贴配置</SegmentedControl.Item></SegmentedControl.Root>{/if}
     </Dialog.Header>
+    {#if originalTag === null && creationMode !== 'manual' && library}
+      {#key creationMode}<EndpointImportDialog bind:busy {library} mode={creationMode} onSaved={imported} onCancel={() => closeEditor(false)} />{/key}
+    {:else}
     <Dialog.Body>
       {#if error}<p role="alert" class="error">{error}</p>{/if}
       {#if draft}
@@ -141,9 +145,9 @@
       <Button type="button" variant="outline" disabled={busy} onclick={() => closeEditor(false)}>取消</Button>
       <Button type="submit" form="endpoint-editor-form" disabled={busy || disabled || !draft}>{busy ? '正在保存…' : '保存并应用'}</Button>
     </Dialog.Footer>
+    {/if}
   </Dialog.Content>
 </Dialog.Root>
-{#if importOpen && library}<EndpointImportDialog bind:open={importOpen} bind:busy {library} onSaved={imported} />{/if}
 <Dialog.Root open={deleteOpen} onOpenChange={closeDelete}>
   <Dialog.Content class="sm:max-w-[440px]" showCloseButton={!busy} onEscapeKeydown={event => { if (busy) event.preventDefault(); }} onInteractOutside={event => { if (busy) event.preventDefault(); }}>
     <Dialog.Header><Dialog.Title>删除端点 {deleting}？</Dialog.Title><Dialog.Description>此端点将从所有配置中移除，相关连接可能中断。</Dialog.Description></Dialog.Header>

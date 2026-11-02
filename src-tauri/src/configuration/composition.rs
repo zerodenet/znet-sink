@@ -86,5 +86,8 @@ pub(crate) fn finalize(base: &Value, mut config: Value, inputs: &Inputs) -> AppR
         &mut config,
         |config| preferences::apply_bypass(config, base, &inputs.app),
     )?;
+    report.apply("endpoint_dns", &["/runtime/dns"], &mut config, |config| {
+        super::endpoint_dns::apply(config, &inputs.app.user_endpoints)
+    })?;
     Ok(Candidate { config, report })
 }

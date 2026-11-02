@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 mod addresses;
+mod configured;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
@@ -138,12 +139,13 @@ fn publish_confirmed(
     Ok(confirmed)
 }
 pub async fn control(
-    state: &AppState,
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
     input: ManagedInput,
     options: CoreIpcOptions,
 ) -> AppResult<Value> {
     let (profile, mut source) =
-        active(state)?.ok_or_else(|| AppError::invalid_argument("请先选择一份配置"))?;
+        active(state.inner())?.ok_or_else(|| AppError::invalid_argument("请先选择一份配置"))?;
     let caps = crate::kernel::zero::queries::zero_capabilities(Some(options.clone())).await?;
     if !super::supports(&caps, "network_endpoint_control_v1") {
         return Err(super::unsupported("当前内核未声明端点控制能力"));
@@ -154,10 +156,18 @@ pub async fn control(
     let (input, next, revision) = prepare(input, &profile, &source, &current, &previous)?;
     let changed = !matches!(input.action, Action::Restart {});
     super::control_params(&input, &current, &caps)?;
+    if changed
+        && crate::configuration::endpoint_dns::owns_dns(&previous.user_endpoints, &current["tag"])
+    {
+        return configured::apply(
+            app_handle, state, previous, next, &input, &current, &caps, options,
+        )
+        .await;
+    }
     let result = super::direction_transition::apply(input, current, &caps, options, revision).await;
     publish_confirmed(result, || {
         if changed {
-            endpoints::store(state, next)
+            endpoints::store(state.inner(), next)
         } else {
             Ok(())
         }

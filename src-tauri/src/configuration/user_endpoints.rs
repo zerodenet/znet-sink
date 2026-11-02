@@ -12,6 +12,7 @@ struct ProtocolAdapter {
     kind: &'static str,
     label: &'static str,
     validate: fn(&Value) -> AppResult<()>,
+    dns_uses_endpoint: fn(&Value, std::net::IpAddr) -> bool,
 }
 // Register only implemented client authoring adapters. Kernel acceptance is
 // checked independently at application; no future protocol is advertised early.
@@ -19,7 +20,14 @@ const PROTOCOLS: &[ProtocolAdapter] = &[ProtocolAdapter {
     kind: "wireguard",
     label: "WireGuard",
     validate: wireguard::validate,
+    dns_uses_endpoint: wireguard::dns_uses_endpoint,
 }];
+pub(crate) fn dns_uses_endpoint(row: &Value, address: std::net::IpAddr) -> bool {
+    PROTOCOLS
+        .iter()
+        .find(|adapter| row["protocol"]["type"] == adapter.kind)
+        .is_some_and(|adapter| (adapter.dns_uses_endpoint)(row, address))
+}
 pub(crate) fn protocols() -> Vec<Value> {
     PROTOCOLS
         .iter()
@@ -27,6 +35,7 @@ pub(crate) fn protocols() -> Vec<Value> {
         .collect()
 }
 pub(crate) fn validate(rows: &[Value]) -> AppResult<()> {
+    super::endpoint_dns::validate(rows)?;
     if rows.len() > 256 {
         return Err(invalid("最多保存 256 个用户端点"));
     }
@@ -105,6 +114,7 @@ pub(crate) fn merge(source: &mut Value, rows: &[Value]) -> AppResult<()> {
         .as_array_mut()
         .ok_or_else(|| invalid("配置 endpoints 必须为数组"))?;
     for row in rows {
+        let row = super::endpoint_dns::kernel_endpoint(row);
         let matches: Vec<_> = entries
             .iter()
             .enumerate()
@@ -113,7 +123,7 @@ pub(crate) fn merge(source: &mut Value, rows: &[Value]) -> AppResult<()> {
             .collect();
         match matches.as_slice() {
             [] => entries.push(row.clone()),
-            [index] if same_definition(&entries[*index], row) => entries[*index] = row.clone(),
+            [index] if same_definition(&entries[*index], &row) => entries[*index] = row.clone(),
             _ => {
                 return Err(invalid(&format!(
                     "用户端点 {} 与配置端点名称冲突，请重命名用户端点",

@@ -22,6 +22,30 @@ fn key(value: &Value) -> bool {
         .and_then(|s| STANDARD.decode(s).ok())
         .is_some_and(|bytes| bytes.len() == 32)
 }
+pub(super) fn dns_uses_endpoint(row: &Value, address: IpAddr) -> bool {
+    row["protocol"]["peers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|peer| peer["allowed_ips"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .any(|network| {
+            let Some((ip, prefix)) = network.split_once('/') else {
+                return false;
+            };
+            match (ip.parse::<IpAddr>(), address, prefix.parse::<u32>()) {
+                (Ok(IpAddr::V4(ip)), IpAddr::V4(address), Ok(prefix)) if prefix <= 32 => {
+                    let mask = u32::MAX.checked_shl(32 - prefix).unwrap_or(0);
+                    u32::from(ip) & mask == u32::from(address) & mask
+                }
+                (Ok(IpAddr::V6(ip)), IpAddr::V6(address), Ok(prefix)) if prefix <= 128 => {
+                    let mask = u128::MAX.checked_shl(128 - prefix).unwrap_or(0);
+                    u128::from(ip) & mask == u128::from(address) & mask
+                }
+                _ => false,
+            }
+        })
+}
 pub(super) fn validate(row: &Value) -> AppResult<()> {
     let protocol = &row["protocol"];
     if !key(&protocol["private_key"]) {

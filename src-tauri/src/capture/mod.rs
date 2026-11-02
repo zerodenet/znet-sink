@@ -1,6 +1,7 @@
 //! System capture lifecycle. OS proxy and Zero TUN retain separate ownership.
 pub mod connection;
 pub mod dns;
+pub(crate) mod intent;
 pub(crate) mod shutdown;
 pub mod system_proxy;
 pub(crate) mod tun;

@@ -88,12 +88,7 @@ pub(super) fn confirmed(response: Value, input: &ControlInput) -> AppResult<Valu
     }
     validate_endpoint(&result["endpoint"])?;
     let endpoint = &result["endpoint"];
-    let matches_intent = match &input.action {
-        Action::SetState { enabled, .. } => endpoint["enabled"] == *enabled,
-        Action::SetDirections { directions, .. } => endpoint["allowed"] == json!(directions),
-        Action::Restart {} => true,
-        Action::ClearOverrides {} => endpoint["state_source"] == "config",
-    };
+    let matches_intent = matches_action(endpoint, &input.action);
     let matches_persistence = match &input.action {
         Action::SetState { persistence, .. } | Action::SetDirections { persistence, .. } => {
             result["persistence"] == json!(persistence)
@@ -111,4 +106,13 @@ pub(super) fn confirmed(response: Value, input: &ControlInput) -> AppResult<Valu
         ));
     }
     Ok(result["endpoint"].clone())
+}
+
+pub(super) fn matches_action(endpoint: &Value, action: &Action) -> bool {
+    match action {
+        Action::SetState { enabled, .. } => endpoint["enabled"] == *enabled,
+        Action::SetDirections { directions, .. } => endpoint["allowed"] == json!(directions),
+        Action::Restart {} => true,
+        Action::ClearOverrides {} => endpoint["state_source"] == "config",
+    }
 }

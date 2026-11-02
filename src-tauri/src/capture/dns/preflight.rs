@@ -8,6 +8,7 @@ pub(super) fn effective_dns(
     if app.overrides.dns || config.pointer("/runtime/dns").is_none() {
         crate::configuration::dns::apply_global_dns(&mut config, &app.dns)?;
     }
+    crate::configuration::endpoint_dns::apply(&mut config, &app.user_endpoints)?;
     config
         .pointer("/runtime/dns")
         .cloned()

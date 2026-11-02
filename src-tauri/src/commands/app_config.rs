@@ -169,6 +169,16 @@ pub(crate) async fn apply_candidate(
     old_config: AppConfig,
     new_config: AppConfig,
 ) -> AppResult<AppConfig> {
+    let mut endpoints_only = old_config.clone();
+    endpoints_only.user_endpoints = new_config.user_endpoints.clone();
+    if old_config.user_endpoints != new_config.user_endpoints && endpoints_only == new_config {
+        return crate::configuration::capture_apply::apply_endpoint_preferences(
+            state.inner(),
+            &old_config,
+            new_config,
+        )
+        .await;
+    }
     // Read legacy capture intent before replacing settings or stopping the process.
     let was_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
