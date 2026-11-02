@@ -20,6 +20,10 @@
   let deleteOpen = $state(false);
   let importOpen = $state(false);
   let attempted = $state(false);
+  let returnFocus: HTMLElement | null = null;
+  function restoreFocus(event: Event) {
+    if (returnFocus?.isConnected) { event.preventDefault(); returnFocus.focus(); }
+  }
   const protocolOptions = $derived((library?.protocols ?? []).filter(protocol => endpointForms[protocol.type]).map(protocol => ({ value: protocol.type, label: protocol.label })));
   const formAdapter = $derived(draft ? endpointForms[draft.protocol.type] : undefined);
   function changeProtocol(protocol: string) {
@@ -39,8 +43,9 @@
     finally { if (alive) busy = false; }
   }
   onMount(() => { alive = true; void refresh(); return () => { alive = false; draft = null; library = null; }; });
-  export async function edit(tag: string | null = null) {
+  export async function edit(tag: string | null = null, trigger?: HTMLElement) {
     if (busy || disabled) return;
+    returnFocus = trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     originalTag = tag; editorOpen = true; draft = null; deleting = null; notice = ''; attempted = false;
     await refresh();
     if (!library || error || !alive) return;
@@ -104,7 +109,7 @@
   {#if notice}<p role="status" class="notice">{notice}</p>{/if}
 {/if}
 <Dialog.Root open={editorOpen} onOpenChange={closeEditor}>
-  <Dialog.Content class="sm:max-w-[560px]" showCloseButton={!busy} onEscapeKeydown={event => { if (busy) event.preventDefault(); }} onInteractOutside={event => { if (busy) event.preventDefault(); }}>
+  <Dialog.Content class="sm:max-w-[560px]" showCloseButton={!busy} onCloseAutoFocus={restoreFocus} onEscapeKeydown={event => { if (busy) event.preventDefault(); }} onInteractOutside={event => { if (busy) event.preventDefault(); }}>
     <Dialog.Header>
       <Dialog.Title>{originalTag === null ? '创建端点' : '编辑端点'}</Dialog.Title>
       <Dialog.Description>自动加入所有配置，切换配置后仍保留。</Dialog.Description>

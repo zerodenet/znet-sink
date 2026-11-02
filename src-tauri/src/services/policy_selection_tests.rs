@@ -176,7 +176,7 @@ fn offline_node_browsing_includes_global_user_endpoints_without_modifying_profil
     app.user_endpoints
         .push(json!({"tag":"global-wg","protocol":{"type":"wireguard",
         "private_key":STANDARD.encode([1;32]),"addresses":["10.2.0.1/32"],
-        "peers":[{"public_key":STANDARD.encode([2;32]),"allowed_ips":["0.0.0.0/0"]}]}}));
+        "peers":[{"public_key":STANDARD.encode([2;32]),"endpoint":"vpn.example:51820","allowed_ips":["0.0.0.0/0"]}]}}));
     let state = AppState::with_domain_data(app, vec![original.clone()], vec![], vec![], vec![]);
     let content = active_content(&state).unwrap().unwrap();
     let nodes = crate::kernel::zero::config::proxy_nodes_from_config(&content);

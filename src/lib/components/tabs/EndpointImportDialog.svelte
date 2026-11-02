@@ -11,7 +11,7 @@
   } = $props();
   let rows = $state<WireGuardFilePreview[]>([]);
   let error = $state('');
-  let picker: HTMLInputElement;
+  let picker = $state<HTMLInputElement | null>(null);
   let alive = true;
   onMount(() => () => { alive = false; rows = []; });
   const problems = $derived.by(() => {
@@ -59,8 +59,8 @@
       <Dialog.Description>支持选择多个 .conf 文件，每个文件创建一个端点，保留所有 Peer。确认后自动加入所有配置。</Dialog.Description>
     </Dialog.Header>
     <Dialog.Body class="grid gap-4">
-      <input bind:this={picker} type="file" accept=".conf,.ini" multiple class="sr-only" aria-label="选择 WireGuard 配置文件" disabled={busy} onchange={select} />
-      <Button variant="outline" disabled={busy} onclick={() => picker.click()}>选择配置文件</Button>
+      <Input bind:ref={picker} type="file" accept=".conf,.ini" multiple class="sr-only" aria-label="选择 WireGuard 配置文件" disabled={busy} onchange={select} />
+      <Button variant="outline" disabled={busy} onclick={() => picker?.click()}>选择配置文件</Button>
       <p class="text-xs text-muted-foreground">文件仅在本机读取。先预览并确认，再保存和应用；不会覆盖已有端点。</p>
       {#if error}<p role="alert" class="text-xs text-destructive">{error}</p>{/if}
       {#each rows as row, index}

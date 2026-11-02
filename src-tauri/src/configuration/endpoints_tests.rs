@@ -115,7 +115,7 @@ fn global_user_endpoint_controls_follow_profile_switches_and_ignore_old_profile_
         .push(serde_json::json!({"tag":"global-wg","enabled":true,
         "directions":{"inbound":false,"outbound":true},"protocol":{"type":"wireguard",
         "private_key":STANDARD.encode([1;32]),"addresses":["10.2.0.1/32"],
-        "peers":[{"public_key":STANDARD.encode([2;32]),"allowed_ips":["0.0.0.0/0"]}]}}));
+        "peers":[{"public_key":STANDARD.encode([2;32]),"endpoint":"vpn.example:51820","allowed_ips":["0.0.0.0/0"]}]}}));
     app.profile_edits.insert(
         "a".into(),
         std::collections::BTreeMap::from([(
