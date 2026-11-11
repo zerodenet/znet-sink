@@ -121,6 +121,7 @@ fn peers(listener: &TcpListener, count: usize) -> BTreeMap<String, Peer> {
         let mut line = String::new();
         BufReader::new(&mut stream).read_line(&mut line).unwrap();
         let (role, pid) = line.trim().split_once(' ').unwrap();
+        eprintln!("received native fixture {role} pid={pid}");
         // Pin the actual live native process object before any parent is killed.
         let raw = unsafe {
             OpenProcess(
@@ -145,14 +146,20 @@ fn peers(listener: &TcpListener, count: usize) -> BTreeMap<String, Peer> {
 
 #[test]
 fn root_exit_retires_the_actual_descendant_job_before_replacement() {
+    eprintln!("root retirement: creating original");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     let mut root = spawn(&mut command("root", &address)).unwrap();
+    eprintln!("root retirement: created pid={}", root.id());
     root.stdin.as_mut().unwrap().write_all(b"G").unwrap();
     let mut members = peers(&listener, 2);
+    eprintln!("root retirement: original and descendant connected");
     members.get_mut("leaf").unwrap().ping();
+    eprintln!("root retirement: descendant answered; closing parent stdin");
     root.stdin.take();
+    eprintln!("root retirement: parent stdin closed; waiting for original exit");
     assert!(root.wait().unwrap().success());
+    eprintln!("root retirement: original exit and empty job confirmed");
     assert!(root.try_wait().unwrap().is_some());
     members["root"].wait_exited();
     members["leaf"].wait_exited();
@@ -190,17 +197,21 @@ fn native_creation_round_trips_arguments_and_case_insensitive_unicode_environmen
 
 #[test]
 fn force_killing_the_gui_owner_closes_its_job_without_killing_an_external_process() {
+    eprintln!("GUI exit: creating original owner");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     let mut owner = Original(command("owner", &address).spawn().unwrap());
     let mut members = peers(&listener, 3);
+    eprintln!("GUI exit: owner and descendants connected");
     members.get_mut("leaf").unwrap().ping();
     let external_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let external_address = external_listener.local_addr().unwrap().to_string();
     let mut external = spawn(&mut command("leaf", &external_address)).unwrap();
     let mut outsider = peers(&external_listener, 1);
+    eprintln!("GUI exit: external process connected; terminating owner");
     owner.0.kill().unwrap();
     owner.0.wait().unwrap();
+    eprintln!("GUI exit: owner reaped; confirming descendants");
     for peer in members.values() {
         peer.wait_exited();
     }

@@ -1,0 +1,76 @@
+name: Windows lifecycle regression
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src-tauri/src/runtime_host/child.rs'
+      - 'src-tauri/src/runtime_host/windows_*'
+      - 'src-tauri/src/runtime_host/windows_spawn/**'
+      - '.github/workflows/windows-lifecycle.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-processes:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+      - name: Compile native lifecycle regressions
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --locked --lib --no-run --message-format=json -j 2 > "$env:RUNNER_TEMP/lifecycle-build.jsonl"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run each native regression with an external deadline
+        shell: pwsh
+        run: |
+          $artifacts = Get-Content "$env:RUNNER_TEMP/lifecycle-build.jsonl" | ForEach-Object { $_ | ConvertFrom-Json }
+          $binary = @($artifacts | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.profile.test -and $_.target.name -eq 'gui_lib' -and $_.executable })[0].executable
+          if (-not $binary) { throw 'Native test executable was not produced' }
+          $cases = @(
+            'native_creation_round_trips_arguments_and_case_insensitive_unicode_environment',
+            'root_exit_retires_the_actual_descendant_job_before_replacement',
+            'force_killing_the_gui_owner_closes_its_job_without_killing_an_external_process'
+          )
+          $failed = $false
+          foreach ($case in $cases) {
+            $stdout = Join-Path $env:RUNNER_TEMP "$case.stdout.log"
+            $stderr = Join-Path $env:RUNNER_TEMP "$case.stderr.log"
+            $child = Start-Process -FilePath $binary -ArgumentList @('--exact', "runtime_host::child::tests::$case", '--nocapture') -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $completed = $child.WaitForExit(45000)
+            if (-not $completed) {
+              # A watchdog expiry is a test failure, never an exit receipt.
+              $child.Kill($true)
+              $child.WaitForExit()
+              $failed = $true
+              Write-Output "::error::$case exceeded its external deadline"
+            } elseif ($child.ExitCode -ne 0) {
+              $failed = $true
+              Write-Output "::error::$case failed with exit code $($child.ExitCode)"
+            }
+            Get-Content $stdout
+            Get-Content $stderr
+          }
+          if ($failed) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-lifecycle-logs
+          path: '${{ runner.temp }}/*.log'
+          retention-days: 7
