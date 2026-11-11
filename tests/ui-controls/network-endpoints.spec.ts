@@ -42,7 +42,7 @@ test('endpoint refresh failures and card facts keep the entire directory layout 
     window.dispatchEvent(new CustomEvent('fixture-endpoint-facts',{detail:{error:true,addresses:false}}));
   });
   await page.clock.runFor(6000);
-  await expect(row.getByRole('alert')).toContainText('端点握手暂时失败');
+  await expect(row.getByRole('button', {name:'wg-a 查看警告',exact:true})).toBeVisible();
   await expect(page.getByLabel('端点目录状态')).toContainText('已同步');
   expect(await boxes()).toEqual(before);
   await expect(row.getByRole('switch')).toBeEnabled();
@@ -56,6 +56,80 @@ test('endpoint refresh failures and card facts keep the entire directory layout 
   await page.clock.runFor(1000);
   await expect(row.getByRole('switch')).toBeEnabled();
   expect(await boxes()).toEqual(before);
+});
+
+test('endpoint warning opens the concrete error and supports keyboard dismissal and focus return',async({page})=>{
+  await open(page,'&observe-only=1');
+  const row=page.getByRole('article',{name:'端点 wg-a',exact:true});
+  await expect(row).toBeVisible();
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-endpoint-facts',{detail:{
+    lastError:{code:'handshake_timeout',message:'连接失败：<peer> 未响应。',cause:'UDP 51820 请求超时\n请检查远端监听。'},health:'degraded',
+  }})));
+  await page.getByRole('button',{name:'刷新端点',exact:true}).click();
+  const warning=row.getByRole('button',{name:'wg-a 查看警告',exact:true});
+  // Read-only endpoints still expose diagnostics; viewing never controls them.
+  await expect(row.getByRole('switch')).toBeDisabled();
+  await warning.click();
+  const dialog=page.getByRole('dialog',{name:'wg-a · 端点警告',exact:true});
+  await expect(dialog).toContainText('连接失败：<peer> 未响应。');
+  await expect(dialog).toContainText('handshake_timeout');
+  await expect(dialog).toContainText('UDP 51820 请求超时');
+  await expect(dialog).toContainText('运行状态：运行中 · 健康降级');
+  await expect(dialog.locator('peer')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  await expect(warning).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button',{name:'知道了',exact:true}).click();
+  await expect(warning).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button',{name:'关闭',exact:true}).click();
+  await expect(page.getByLabel('保存结果')).not.toContainText('"operation"');
+});
+
+test('degraded endpoint with no error explains the missing reason and stale observation',async({page})=>{
+  await page.clock.install();await open(page);
+  await expect(page.getByRole('article',{name:'端点 wg-a',exact:true})).toBeVisible();
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-endpoint-facts',{detail:{health:'degraded',lastError:null}})));
+  await page.clock.runFor(6000);
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-endpoint-read-state',{detail:{catalogError:true}})));
+  await page.clock.runFor(6000);
+  await expect(page.getByLabel('端点目录状态')).toContainText('同步失败');
+  await page.getByRole('button',{name:'wg-a 查看警告',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog).toContainText('内核报告端点健康降级，但未提供具体错误原因。');
+  await expect(dialog).toContainText('当前显示上次观测');
+  await expect(dialog).toContainText('日志页');
+  await expect(dialog).not.toContainText('错误代码：');
+});
+
+test('warning details retain long errors across polling recovery and fit a narrow window',async({page})=>{
+  await page.clock.install();await open(page);
+  await expect(page.getByRole('article',{name:'端点 wg-a',exact:true})).toBeVisible();
+  const cause='udp://'+ 'unbroken-remote-address'.repeat(50);
+  await page.evaluate(cause=>window.dispatchEvent(new CustomEvent('fixture-endpoint-facts',{detail:{
+    lastError:{code:'transport',message:'读取失败。'.repeat(80),cause},health:'degraded',
+  }})),cause);
+  await page.getByRole('button',{name:'刷新端点',exact:true}).click();
+  await page.getByRole('button',{name:'wg-a 查看警告',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-endpoint-facts',{detail:{lastError:null,health:'healthy'}})));
+  await page.clock.runFor(6000);
+  await expect(dialog).toContainText('读取失败。'.repeat(80));
+  await expect(dialog).toContainText(cause);
+  await page.setViewportSize({width:360,height:650});
+  await finishEntryAnimations(page);
+  expect(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  const body=dialog.locator('[data-slot="dialog-body"]');
+  expect(await body.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  expect(await body.evaluate(el=>el.scrollHeight>el.clientHeight)).toBe(true);
+  await expect(dialog.getByRole('button',{name:'知道了',exact:true})).toBeInViewport();
+  await page.screenshot({path:test.info().outputPath('endpoint-warning-360.png')});
+  await dialog.getByRole('button',{name:'知道了',exact:true}).click();
+  await expect(page.getByRole('button',{name:'wg-a 查看警告',exact:true})).toHaveCount(0);
+  await expect(page.getByLabel('wg-a 更多操作')).toBeFocused();
 });
 
 test('opened endpoint details hold their size through background failure and recovery',async({page})=>{

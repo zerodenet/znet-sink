@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Network, Pencil, Trash2, MoreHorizontal, LoaderCircle, RotateCw, Info, ArrowDownToLine, ArrowUpFromLine, Cable, Boxes, Route, Pin, AlertTriangle, MapPin } from '@lucide/svelte';
+  import { Network, Pencil, Trash2, MoreHorizontal, LoaderCircle, RotateCw, Info, ArrowDownToLine, ArrowUpFromLine, Cable, Boxes, Route, Pin, MapPin } from '@lucide/svelte';
+  import EndpointWarning from './EndpointWarning.svelte';
   import EndpointObservationView from './EndpointObservationView.svelte';
   import EndpointDetailsView from './EndpointDetailsView.svelte';
   import TrafficMiniChart from './TrafficMiniChart.svelte';
@@ -81,7 +82,7 @@
     </div>
   </header>
   <div class="local-addresses">{#if addresses.length}<MapPin size={12}/><span aria-label="本机隧道 IP" title={`本机隧道 IP（${stale ? '上次观测' : '当前配置值'}）：${addresses.join(' · ')}`}>{addresses.join(' · ')}</span>{/if}</div>
-  <div class="status-row"><span class="status" class:running={endpoint.state === 'running'} class:failed={endpoint.state === 'failed'}><i></i>{endpointStateLabel(endpoint)}</span><span class="health-indicator">{#if endpoint.last_error}<span role="alert" title={endpoint.last_error.message}><AlertTriangle size={13}/><span class="sr-only">{endpoint.last_error.message}</span></span>{:else if endpoint.health === 'degraded'}<AlertTriangle size={13} aria-label="健康降级" />{/if}</span><span class="effective" title="内核实际生效方向">{directionLabel(endpoint.effective)}</span></div>
+  <div class="status-row"><span class="status" class:running={endpoint.state === 'running'} class:failed={endpoint.state === 'failed'}><i></i>{endpointStateLabel(endpoint)}</span><span class="health-indicator"><EndpointWarning {endpoint} {stale}/></span><span class="effective" title="内核实际生效方向">{directionLabel(endpoint.effective)}</span></div>
   <div class="traffic-slot">
   {#if observationAvailable}
     <p class="observation-source">{#if observation?.snapshot.scope.kind === 'outbound' || observation?.snapshot.scope.kind === 'inbound'}<span title={`内核声明的${observation.snapshot.scope.kind === 'outbound' ? '出站' : '入站'} ${observation.snapshot.scope.tag} 统计；Inner 为内层流量，与 Flow、Outer 分开计量`}>{observation.snapshot.scope.kind === 'outbound' ? '出站' : '入站'} · Inner</span>{:else if !observation}暂无端点统计快照{/if}</p>
@@ -131,7 +132,7 @@
   .local-addresses>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); }
   .observation-source { height:16px; font-size:10px; color:var(--muted-foreground); margin-top:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .traffic-slot { height:140px; display:flex; flex-direction:column; justify-content:center; }
-  .health-indicator { width:13px; flex-shrink:0; color:var(--destructive); }
+  .health-indicator { min-width:13px; height:26px; display:flex; align-items:center; flex-shrink:0; }
   :global(.endpoint-details-body) { height:min(440px,60vh); flex-shrink:0; scrollbar-gutter:stable; }
   footer { border-top:1px solid var(--border); padding-top:12px; justify-content:space-between; gap:10px; } .directions { gap:6px; } .directions>button { position:relative; gap:5px; padding:5px 8px; border-radius:6px; font-size:11px; color:var(--muted-foreground); cursor:pointer; background:var(--muted); }
   .directions>button.active { color:var(--primary); background:color-mix(in srgb,var(--primary) 9%,transparent); } .directions>button:focus-visible { outline:2px solid var(--ring); } .directions>button:disabled { opacity:.45; cursor:default; }

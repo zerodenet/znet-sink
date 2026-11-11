@@ -62,9 +62,11 @@ window.addEventListener('fixture-endpoint-read-state',event=>{
   readState={...readState,...(event as CustomEvent<typeof readState>).detail};
 });
 window.addEventListener('fixture-endpoint-facts',event=>{
-  const facts=(event as CustomEvent<{error?:boolean;addresses?:boolean}>).detail;
+  const facts=(event as CustomEvent<{error?:boolean;addresses?:boolean;lastError?:NetworkEndpoint['last_error'];health?:NetworkEndpoint['health']}>).detail;
   if(facts.addresses!==undefined)showAddresses=facts.addresses;
   if(facts.error!==undefined)endpoints[0].last_error=facts.error?{code:'transport',message:'端点握手暂时失败。'.repeat(20)}:null;
+  if(facts.lastError!==undefined)endpoints[0].last_error=facts.lastError;
+  if(facts.health!==undefined)endpoints[0].health=facts.health;
 });
 
 window.addEventListener('fixture-reload-config', () => {
