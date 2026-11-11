@@ -92,9 +92,16 @@ jobs:
 
       - name: Generate release notes from conventional commits
         id: generate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          mapfile -t TAGS < <(git tag --list)
+          # A failed draft still has an immutable tag. It must not hide fixes
+          # from the next candidate's notes before those fixes were published.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName,isDraft --jq '.[] | select(.isDraft == false) | .tagName' \
+            > "$RUNNER_TEMP/published-release-tags.txt"
+          mapfile -t TAGS < "$RUNNER_TEMP/published-release-tags.txt"
           PREV_TAG=$(node scripts/release-policy.mjs previous "$GITHUB_REF_NAME" "${TAGS[@]}")
           if [ -z "$PREV_TAG" ]; then
             RANGE=""
