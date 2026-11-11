@@ -1,17 +1,24 @@
 //! Desktop managed-runtime owner. Platform child execution stays outside shared domains.
+mod child;
 mod cleanup;
 mod logging;
 mod monitor;
 mod owner;
 mod readiness;
+mod restart_budget;
+mod retire;
 mod shutdown;
 mod spawn;
 mod start;
 mod status;
 mod stop;
+#[cfg(all(test, not(windows)))]
+#[path = "windows_spawn/commandline.rs"]
+mod windows_commandline;
 pub(crate) use owner::Host;
 pub use owner::HostSnapshot;
 use owner::ManagedCoreProcess;
+pub(crate) use retire::EXIT_CLEANUP_WAIT;
 pub(crate) use shutdown::persist_exit_tun_intent;
 pub use shutdown::shutdown_managed_runtime;
 pub use start::{restart, start};

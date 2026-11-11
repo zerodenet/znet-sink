@@ -2,6 +2,7 @@
 pub mod connection;
 pub mod dns;
 pub(crate) mod intent;
+pub(crate) mod residue;
 pub(crate) mod shutdown;
 pub mod system_proxy;
 pub(crate) mod tun;

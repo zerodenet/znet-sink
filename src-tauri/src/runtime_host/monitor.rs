@@ -43,20 +43,20 @@ pub(super) fn spawn_monitor(
     /// stalls in the poll loop.
     const PING_TIMEOUT: Duration = Duration::from_secs(2);
     /// Consecutive ping failures before the kernel is considered hung and
-    /// killed (so the exit path restarts it).
+    /// retired (so the confirmed exit path can restart it).
     const MAX_PING_FAILURES: u32 = 3;
 
     std::thread::spawn(move || {
         let state = app_handle.state::<AppState>();
         let endpoint = snapshot.endpoint.clone();
-        let mut restart_budget: u32 = 0;
-        let mut last_started_at = Instant::now();
+        let mut restart_budget =
+            super::restart_budget::RestartBudget::new(MAX_RESTARTS, STABLE_RUN);
         let mut last_ping_at = Instant::now();
         let mut ping_failures: u32 = 0;
 
         'outer: loop {
             // ── Phase 1: monitor the current child until it exits ──
-            let was_stable = loop {
+            loop {
                 std::thread::sleep(POLL_INTERVAL);
                 if state.is_shutting_down() {
                     return;
@@ -79,7 +79,7 @@ pub(super) fn spawn_monitor(
 
                 // Periodic health ping: catch a kernel that is alive as a
                 // process but hung on IPC (invisible to try_wait). A run of
-                // failures ⇒ kill so the exit path below restarts it.
+                // failures ⇒ retire the exact child before considering restart.
                 if last_ping_at.elapsed() >= PING_INTERVAL {
                     last_ping_at = Instant::now();
                     if state.is_shutting_down() {
@@ -114,24 +114,30 @@ pub(super) fn spawn_monitor(
                                     LogSource::App,
                                     LogLevel::Error,
                                     format!(
-                                        "kernel unresponsive for {} consecutive shared IPC checks; killing to force restart",
+                                        "kernel unresponsive for {} consecutive shared IPC checks; cleaning TUN and confirming child exit before restart",
                                         ping_failures
                                     ),
                                     None,
                                 );
                                 ping_failures = 0;
-                                if let Ok(mut process) =
-                                    lock(state.runtime_host().process(), "core_process")
+                                if state.is_shutting_down()
+                                    || state.core_process_monitor_generation() != monitor_generation
                                 {
-                                    if state.is_shutting_down()
-                                        || state.core_process_monitor_generation()
-                                            != monitor_generation
-                                    {
-                                        return;
-                                    }
-                                    if let Some(child) = process.child.as_mut() {
-                                        let _ = child.kill();
-                                    }
+                                    return;
+                                }
+                                if let Err(error) = super::stop::retire_for_recovery(
+                                    app_handle.clone(),
+                                    state.clone(),
+                                ) {
+                                    state.runtime_host().record_error(error.message.clone());
+                                    let _ = logs::append_entry(
+                                        &state,
+                                        LogSource::App,
+                                        LogLevel::Error,
+                                        format!("auto-restart blocked: {}", error.message),
+                                        None,
+                                    );
+                                    return;
                                 }
                             }
                         }
@@ -150,7 +156,18 @@ pub(super) fn spawn_monitor(
                     return;
                 }
                 let exited_info = match process.child.as_mut() {
-                    Some(child) => child.try_wait().ok().flatten(),
+                    Some(child) => match child.try_wait() {
+                        Ok(status) => status,
+                        Err(error) => {
+                            let message = format!(
+                                "auto-restart blocked: old kernel exit is unconfirmed: {error}"
+                            );
+                            process.status.state = CoreProcessState::Failed;
+                            process.status.last_error = Some(message.clone());
+                            state.runtime_host().record_error(message);
+                            return;
+                        }
+                    },
                     None => None,
                 };
                 // Still running → keep polling.
@@ -167,8 +184,10 @@ pub(super) fn spawn_monitor(
                 {
                     return;
                 }
-                let code = exited_info.as_ref().and_then(|es| es.code());
-                let was_stable = last_started_at.elapsed() >= STABLE_RUN;
+                let code = exited_info
+                    .as_ref()
+                    .map(|es| es.code())
+                    .unwrap_or(process.status.exit_code);
                 let reason = if code.is_none() {
                     CoreProcessExitReason::Crashed
                 } else {
@@ -196,10 +215,19 @@ pub(super) fn spawn_monitor(
                     state.client_core_snapshot(),
                 );
 
-                if let Err(error) = system_proxy_guard::disable_with_guard() {
-                    state
-                        .runtime_host()
-                        .record_error(format!("proxy cleanup after core exit: {}", error.message));
+                if let Err(error) = super::cleanup::release_capture(
+                    true,
+                    crate::capture::dns::release,
+                    system_proxy_guard::disable_with_guard,
+                ) {
+                    let message = format!(
+                        "auto-restart blocked: capture cleanup after core exit: {}",
+                        error.message
+                    );
+                    state.runtime_host().record_error(message.clone());
+                    let _ =
+                        logs::append_entry(&state, LogSource::App, LogLevel::Error, message, None);
+                    return;
                 }
                 let msg = format!("core process {} (code={})", reason_str, code.unwrap_or(-1));
                 let _ =
@@ -212,8 +240,8 @@ pub(super) fn spawn_monitor(
                         "message": msg,
                     }),
                 );
-                break was_stable;
-            };
+                break;
+            }
 
             // ── Phase 2: restart with backoff (handles spawn retries too) ──
             if state.is_shutting_down() {
@@ -222,13 +250,8 @@ pub(super) fn spawn_monitor(
             if state.core_process_monitor_generation() != monitor_generation {
                 return;
             }
-            if was_stable {
-                restart_budget = 0;
-                eprintln!("[ZNet] watchdog: previous run was stable, reset restart budget");
-            }
             loop {
-                restart_budget += 1;
-                if restart_budget > MAX_RESTARTS {
+                if !restart_budget.allow_next(Instant::now()) {
                     let msg = format!(
                         "core process crashed {} times consecutively; giving up auto-restart",
                         MAX_RESTARTS
@@ -249,7 +272,9 @@ pub(super) fn spawn_monitor(
                 }
                 eprintln!(
                     "[ZNet] watchdog: kernel exited, restarting in {:?} (attempt {}/{})",
-                    RESTART_BACKOFF, restart_budget, MAX_RESTARTS
+                    RESTART_BACKOFF,
+                    restart_budget.attempt(),
+                    MAX_RESTARTS
                 );
                 let _ = logs::append_entry(
                     &state,
@@ -257,7 +282,9 @@ pub(super) fn spawn_monitor(
                     LogLevel::Info,
                     format!(
                         "core process: auto-restart in {:?} (attempt {}/{})",
-                        RESTART_BACKOFF, restart_budget, MAX_RESTARTS
+                        RESTART_BACKOFF,
+                        restart_budget.attempt(),
+                        MAX_RESTARTS
                     ),
                     None,
                 );
@@ -283,10 +310,58 @@ pub(super) fn spawn_monitor(
                 operation.finish(&result);
                 match result {
                     Ok(_) => {
-                        last_started_at = Instant::now();
+                        last_ping_at = Instant::now();
+                        ping_failures = 0;
+                        if state.is_shutting_down()
+                            || state.core_process_monitor_generation() != monitor_generation
+                        {
+                            if let Err(error) =
+                                super::stop::retire_for_recovery(app_handle.clone(), state.clone())
+                            {
+                                state.runtime_host().record_error(error.message);
+                            }
+                            return;
+                        }
+                        // Configuration composition keeps GUI-owned TUN out
+                        // of config.apply. Restore this session's saved intent
+                        // only after the previous child exit and new readiness.
+                        if let Err(error) = tauri::async_runtime::block_on(
+                            crate::capture::tun::restore_app_tun_after_core_transition(
+                                state.inner(),
+                            ),
+                        ) {
+                            state.runtime_host().record_error(error.message.clone());
+                            let _ = logs::append_entry(
+                                &state,
+                                LogSource::App,
+                                LogLevel::Error,
+                                format!("TUN restore after auto-restart failed: {}", error.message),
+                                None,
+                            );
+                            if let Err(cleanup) =
+                                super::stop::retire_for_recovery(app_handle.clone(), state.clone())
+                            {
+                                state.runtime_host().record_error(format!(
+                                    "{}; candidate retirement: {}",
+                                    error.message, cleanup.message
+                                ));
+                            }
+                            return;
+                        }
+                        if state.is_shutting_down()
+                            || state.core_process_monitor_generation() != monitor_generation
+                        {
+                            if let Err(error) =
+                                super::stop::retire_for_recovery(app_handle.clone(), state.clone())
+                            {
+                                state.runtime_host().record_error(error.message);
+                            }
+                            return;
+                        }
+                        restart_budget.mark_ready(Instant::now());
                         let _ = app_handle.emit(
                             "core:process-restarted",
-                            json!({ "attempt": restart_budget }),
+                            json!({ "attempt": restart_budget.attempt() }),
                         );
                         crate::services::network_probe::emit_host_network_changed(
                             &app_handle,
@@ -299,6 +374,12 @@ pub(super) fn spawn_monitor(
                             "[ZNet] watchdog: restart spawn failed: {:?}; will retry",
                             error
                         );
+                        if matches!(
+                            error.code,
+                            "kernel_exit_unconfirmed" | "tun_cleanup_unconfirmed"
+                        ) {
+                            return;
+                        }
                         // spawn_core_child already set status=Failed. Loop:
                         // budget++ and another backed-off retry.
                     }

@@ -22,7 +22,9 @@ pub(super) fn complete_final_exit(
         }
         Err(1) => {
             // Drain the existing cleanup instead of replaying network commands.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            // A native exit must not overtake the already-running TUN stop
+            // (60s response budget plus queries and child-exit confirmation).
+            let deadline = std::time::Instant::now() + crate::runtime_host::EXIT_CLEANUP_WAIT;
             while stage.load(Ordering::SeqCst) == 1 && std::time::Instant::now() < deadline {
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }

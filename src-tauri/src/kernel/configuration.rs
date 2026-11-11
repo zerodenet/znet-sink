@@ -33,8 +33,18 @@ impl BoundControl {
         })
     }
     pub(crate) async fn call(&self, frame: Value) -> AppResult<Value> {
+        let mut binding = self.binding.clone();
+        if frame.get("type").and_then(Value::as_str) == Some("command") {
+            if let Some(timeout) = frame
+                .get("method")
+                .and_then(Value::as_str)
+                .and_then(commands::command_response_timeout)
+            {
+                binding.timeout = binding.timeout.max(timeout);
+            }
+        }
         let result =
-            protocol::request_on_connection(frame, &self.binding, self.connection.clone()).await?;
+            protocol::request_on_connection(frame, &binding, self.connection.clone()).await?;
         parsing::unwrap_call_result(result.response, result.error)
     }
     pub(crate) async fn identity(&self) -> AppResult<RuntimeIdentity> {

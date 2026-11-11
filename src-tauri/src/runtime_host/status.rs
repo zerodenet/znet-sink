@@ -94,7 +94,13 @@ pub(super) fn refresh_locked_status(
             );
         }
         Ok(None) => {
-            process.status.state = CoreProcessState::Running;
+            // A retained child whose lifetime pipe was closed is still
+            // retiring, even if the OS has not reported its exit yet.
+            if child.stdin.is_none() {
+                process.status.state = CoreProcessState::Failed;
+            } else if process.status.state != CoreProcessState::Failed {
+                process.status.state = CoreProcessState::Running;
+            }
             process.status.pid = Some(pid);
         }
         Err(error) => {
@@ -108,6 +114,9 @@ pub(super) fn refresh_locked_status(
                 format!("failed to poll core process: {error}"),
                 Some(serde_json::json!({ "pid": pid })),
             );
+            return Err(crate::errors::AppError::internal(
+                process.status.last_error.clone().unwrap(),
+            ));
         }
     }
 

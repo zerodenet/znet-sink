@@ -2,10 +2,12 @@ use super::stop_owned_tun;
 use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader, Write},
-    os::unix::net::UnixListener,
     sync::{Arc, Mutex},
     thread,
 };
+
+#[path = "shutdown_test_transport.rs"]
+mod transport;
 
 #[test]
 fn exit_persists_tun_off_for_next_launch_without_losing_network_settings() {
@@ -77,21 +79,22 @@ fn exit_does_not_claim_saved_tun_off_when_storage_fails() {
 #[tokio::test]
 async fn shutdown_checks_owned_peer_does_not_replay_and_confirms_stopped_state() {
     // Wrong peer, lost reply, unconfirmed stop, successful cleanup.
-    for (peer_pid, lose_reply, still_enabled) in [
-        (9, true, true),
-        (7, true, true),
-        (7, false, true),
-        (7, false, false),
+    for (peer_pid, lose_reply, still_enabled, slow_cleanup, cleanup_error) in [
+        (9, true, true, false, false),
+        (7, true, true, false, false),
+        (7, false, true, false, false),
+        (7, false, false, false, false),
+        (7, false, false, true, false),
+        (7, false, false, false, true),
     ] {
-        let dir = tempfile::tempdir_in("/tmp").unwrap();
-        let path = dir.path().join("cleanup.sock");
-        let listener = UnixListener::bind(&path).unwrap();
+        let (listener, endpoint, _dir) = transport::listen();
         let methods = Arc::new(Mutex::new(Vec::new()));
         let recorded = methods.clone();
         let server = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+            let stream = transport::accept(listener);
+            #[cfg(unix)]
             stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
                 .unwrap();
             let mut writer = stream.try_clone().unwrap();
             let mut submitted = false;
@@ -103,12 +106,20 @@ async fn shutdown_checks_owned_peer_does_not_replay_and_confirms_stopped_state()
                     "query" if request["request"].get("runtime").is_some() => {
                         json!({"runtime":{"pid":peer_pid}})
                     }
-                    "query" => json!({"tun_status":{"running":!submitted || still_enabled}}),
+                    "query" => json!({"tun_status":{
+                        "running":!submitted || still_enabled,
+                        "last_error": if submitted && cleanup_error { Some("route removal failed") } else { None }
+                    }}),
                     "command" => {
                         assert_eq!(request["method"], "tun.stop");
                         recorded.lock().unwrap().push("tun.stop");
                         if lose_reply {
                             break;
+                        }
+                        if slow_cleanup {
+                            // Longer than both the old 3s response budget and
+                            // the old 4s outer shutdown cancellation.
+                            thread::sleep(std::time::Duration::from_millis(4200));
                         }
                         submitted = true;
                         json!({"accepted":true})
@@ -126,16 +137,13 @@ async fn shutdown_checks_owned_peer_does_not_replay_and_confirms_stopped_state()
                 }
             }
         });
-        let result = stop_owned_tun(7, path.to_string_lossy().into_owned()).await;
+        let result = stop_owned_tun(7, endpoint.path.clone()).await;
         assert_eq!(
             result.is_ok(),
-            peer_pid == 7 && !lose_reply && !still_enabled,
+            peer_pid == 7 && !lose_reply && !still_enabled && !cleanup_error,
             "peer={peer_pid}, lost={lose_reply}, enabled={still_enabled}: {result:?}"
         );
-        crate::kernel::connection::reset_endpoint(&crate::models::core::CoreEndpoint {
-            transport: "unix".into(),
-            path: path.to_string_lossy().into_owned(),
-        });
+        crate::kernel::connection::reset_endpoint(&endpoint);
         server.join().unwrap();
         assert_eq!(methods.lock().unwrap().len(), usize::from(peer_pid == 7));
     }

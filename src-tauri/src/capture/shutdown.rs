@@ -58,6 +58,6 @@ fn stopped_without_error(status: crate::models::zero_runtime::GuiTunStatus) -> A
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 #[path = "shutdown_tests.rs"]
 mod tests;

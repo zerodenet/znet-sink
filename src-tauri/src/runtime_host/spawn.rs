@@ -26,6 +26,16 @@ pub(super) fn spawn_core_child(
     snapshot: &CoreConfigSnapshot,
     app_handle: &AppHandle,
 ) -> AppResult<CoreProcessStatus> {
+    lock(state.runtime_host().process(), "core_process")?.ensure_spawn_allowed()?;
+    let tun = lock(state.app_config(), "app_config")?.tun.clone();
+    if let Err(error) =
+        crate::capture::residue::confirm_absent(&tun, snapshot.working_dir.as_deref())
+    {
+        let mut process = lock(state.runtime_host().process(), "core_process")?;
+        process.status.state = CoreProcessState::Failed;
+        process.status.last_error = Some(error.message.clone());
+        return Err(error);
+    }
     let executable_path = snapshot.executable_path.as_deref().unwrap_or_default();
 
     if let Err(error) = crate::services::kernel_manager::transaction::ensure_no_interrupted_upgrade(
@@ -61,7 +71,7 @@ pub(super) fn spawn_core_child(
     command.stdout(Stdio::null());
     command.stderr(Stdio::piped());
 
-    let mut child = match command.spawn() {
+    let mut child = match super::child::spawn(&mut command) {
         Ok(child) => child,
         Err(error) => {
             let message = format!("failed to spawn core process: {error}");
@@ -88,17 +98,23 @@ pub(super) fn spawn_core_child(
 
     let pid = child.id();
     if child.stdin.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(AppError::internal(
-            "core process parent-lifetime pipe was not available",
+        return Err(failed_start(
+            state,
+            snapshot,
+            child,
+            None,
+            AppError::internal("core process parent-lifetime pipe was not available"),
         ));
     }
-    let stderr = child.stderr.take().ok_or_else(|| {
-        let _ = child.kill();
-        let _ = child.wait();
-        AppError::internal("core process stderr pipe was not available")
-    })?;
+    let Some(stderr) = child.stderr.take() else {
+        return Err(failed_start(
+            state,
+            snapshot,
+            child,
+            None,
+            AppError::internal("core process stderr pipe was not available"),
+        ));
+    };
 
     let app_handle_stderr = app_handle.clone();
     let stderr_handle = std::thread::spawn(move || {
@@ -135,44 +151,13 @@ pub(super) fn spawn_core_child(
         ))
     });
     if let Err(readiness_error) = ready {
-        let _ = child.kill();
-        let exit_status = child.wait().ok();
-        let _ = stderr_handle.join();
-        let exit_code = exit_status.and_then(|status| status.code());
-        let message = format!(
-            "core process failed startup readiness: {} (code={})",
-            readiness_error.message,
-            exit_code
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        );
-        {
-            let mut process = lock(state.runtime_host().process(), "core_process")?;
-            process.status.state = CoreProcessState::Failed;
-            process.status.pid = None;
-            process.status.executable_path = snapshot.executable_path.clone();
-            process.status.working_dir = snapshot.working_dir.clone();
-            process.status.config_path = snapshot.config_path.clone();
-            process.status.endpoint_path = snapshot.endpoint.path.clone();
-            process.status.exited_at_unix_ms = Some(crate::services::common::now_unix_ms());
-            process.status.exit_code = exit_code;
-            process.status.exit_reason = Some(CoreProcessExitReason::Exited);
-            process.status.last_error = Some(message.clone());
-        }
-        let _ = logs::append_entry(
+        return Err(failed_start(
             state,
-            LogSource::Core,
-            LogLevel::Error,
-            message.clone(),
-            Some(json!({
-                "pid": pid,
-                "exitCode": exit_code,
-                "configPath": snapshot.config_path,
-                "endpoint": snapshot.endpoint,
-                "readinessError": readiness_error,
-            })),
-        );
-        return Err(AppError::internal(message));
+            snapshot,
+            child,
+            Some(stderr_handle),
+            readiness_error,
+        ));
     }
 
     let (status, executable_path_for_log) = {
@@ -221,4 +206,79 @@ pub(super) fn spawn_core_child(
     );
 
     Ok(status)
+}
+
+fn failed_start(
+    state: &AppState,
+    snapshot: &CoreConfigSnapshot,
+    mut child: super::child::ManagedChild,
+    mut stderr_handle: Option<std::thread::JoinHandle<()>>,
+    readiness_error: AppError,
+) -> AppError {
+    let pid = child.id();
+    let retirement = super::retire::retire_owned_child(&mut child, Some(&snapshot.endpoint.path));
+    let exit_code = retirement
+        .exit
+        .as_ref()
+        .ok()
+        .and_then(|status| status.code());
+    let mut message = format!(
+        "core process failed startup readiness: {}",
+        readiness_error.message
+    );
+    if let Err(error) = &retirement.tun_cleanup {
+        message.push_str(&format!("; TUN cleanup unconfirmed: {}", error.message));
+    }
+    if let Err(error) = &retirement.exit {
+        message.push_str(&format!("; old kernel exit unconfirmed: {error}"));
+    } else if let Some(handle) = stderr_handle.take() {
+        let _ = handle.join();
+    }
+    // A failed wait is not an exit receipt. Keep the original child, pipe
+    // worker and endpoint installed so neither a user nor watchdog can replace
+    // it. The host transition serializes this with every other spawn/stop.
+    let mut process = state
+        .runtime_host()
+        .process()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    process.status.state = CoreProcessState::Failed;
+    process.status.executable_path = snapshot.executable_path.clone();
+    process.status.working_dir = snapshot.working_dir.clone();
+    process.status.config_path = snapshot.config_path.clone();
+    process.status.endpoint_path = snapshot.endpoint.path.clone();
+    process.status.exit_code = exit_code;
+    process.status.last_error = Some(message.clone());
+    if retirement.exit.is_err() {
+        process.status.pid = Some(pid);
+        process.status.exited_at_unix_ms = None;
+        process.endpoint = Some(snapshot.endpoint.clone());
+        process.child = Some(child);
+        process.stderr_handle = stderr_handle;
+    } else {
+        crate::kernel::connection::reset_endpoint(&snapshot.endpoint);
+        process.status.pid = None;
+        process.status.exited_at_unix_ms = Some(common::now_unix_ms());
+        process.status.exit_reason = Some(CoreProcessExitReason::Exited);
+    }
+    drop(process);
+    let _ = logs::append_entry(
+        state,
+        LogSource::Core,
+        LogLevel::Error,
+        message.clone(),
+        Some(json!({
+            "pid": pid, "exitCode": exit_code, "endpoint": snapshot.endpoint,
+            "readinessError": readiness_error, "exitConfirmed": retirement.exit.is_ok(),
+        })),
+    );
+    AppError {
+        code: if retirement.exit.is_err() {
+            "kernel_exit_unconfirmed"
+        } else {
+            "internal"
+        },
+        message,
+        details: None,
+    }
 }

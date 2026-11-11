@@ -3,12 +3,15 @@ use super::*;
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
 
-struct OwnedChild(Child);
+struct OwnedChild(Child, Option<std::thread::JoinHandle<()>>);
 
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
+        if let Some(worker) = self.1.take() {
+            worker.join().unwrap();
+        }
     }
 }
 
@@ -28,18 +31,23 @@ fn spawn(dir: &std::path::Path, port: u16) -> (OwnedChild, CoreEndpoint) {
         dir.file_name().unwrap().to_string_lossy()
     ));
     let stderr = std::fs::File::create(dir.join("kernel-stderr.log")).unwrap();
-    let child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(["run", "--parent-lifetime-stdin", "--control-socket"])
         .arg(&socket)
         .arg(&config)
         .env("ZERO_DNS_STATE_DIR", dir.join("dns-state"))
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    let mut child = crate::runtime_host::child::spawn(&mut command).unwrap();
+    let mut output = child.stderr.take().unwrap();
+    let worker = std::thread::spawn(move || {
+        let mut file = stderr;
+        std::io::copy(&mut output, &mut file).unwrap();
+    });
     (
-        OwnedChild(child),
+        OwnedChild(child, Some(worker)),
         CoreEndpoint {
             transport: crate::kernel::transport::transport_name().into(),
             path: socket.to_string_lossy().into_owned(),

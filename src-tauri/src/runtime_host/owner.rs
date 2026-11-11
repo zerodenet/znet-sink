@@ -1,5 +1,6 @@
+use super::child::ManagedChild as Child;
 use crate::models::core_process::{CoreProcessState, CoreProcessStatus};
-use std::{process::Child, thread::JoinHandle};
+use std::thread::JoinHandle;
 pub(super) struct ManagedCoreProcess {
     pub child: Option<Child>,
     pub stderr_handle: Option<JoinHandle<()>>,
@@ -14,22 +15,13 @@ impl Drop for ManagedCoreProcess {
                 "[ZNet] shutdown: closing core lifetime pipe (pid={})",
                 child.id()
             );
-            child.stdin.take();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) if std::time::Instant::now() < deadline => {
-                        std::thread::sleep(std::time::Duration::from_millis(25));
-                    }
-                    _ => {
-                        // This is still scoped to the exact child owned by
-                        // this state; never kill processes by executable name.
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                }
+            // The explicit shutdown path attempts TUN cleanup while IPC and
+            // the async runtime are alive. Drop can only finish this exact
+            // child's lifetime/exit protocol; it cannot assert TUN cleanup.
+            if let Err(error) =
+                super::retire::stop_owned_child(child, super::retire::GRACEFUL_EXIT_TIMEOUT)
+            {
+                eprintln!("[ZNet] shutdown: owned child exit unconfirmed: {error}");
             }
         }
         self.stderr_handle.take().map(|h| h.join());
@@ -57,6 +49,21 @@ impl Default for ManagedCoreProcess {
                 last_error: None,
             },
         }
+    }
+}
+
+impl ManagedCoreProcess {
+    /// Even a failed or terminating child reserves its slot until its original
+    /// exit has been observed. Never overwrite a retained native process.
+    pub(super) fn ensure_spawn_allowed(&self) -> crate::errors::AppResult<()> {
+        if let Some(child) = &self.child {
+            return Err(crate::errors::AppError {
+                code: "kernel_exit_unconfirmed",
+                message: format!("previous kernel exit is not confirmed (pid={})", child.id()),
+                details: None,
+            });
+        }
+        Ok(())
     }
 }
 

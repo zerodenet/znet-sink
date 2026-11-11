@@ -53,6 +53,8 @@ assert.ok(
 const appRuntime = read('src-tauri/src/application/mod.rs');
 const tauriManifest = read('src-tauri/Cargo.toml');
 const coreProcessService = read('src-tauri/src/runtime_host/shutdown.rs');
+const coreStop = read('src-tauri/src/runtime_host/stop.rs');
+const coreRetirement = read('src-tauri/src/runtime_host/retire.rs');
 const tunShutdown = read('src-tauri/src/capture/shutdown.rs');
 const lifecyclePhases = read('src-tauri/src/lifecycle/phases.rs');
 assert.ok(
@@ -70,9 +72,13 @@ assert.ok(
 assert.ok(
   appRuntime.includes('tauri::RunEvent::ExitRequested')
     && appRuntime.includes('core_process::shutdown_managed_runtime(cleanup_app.clone()).await')
-    && coreProcessService.indexOf('crate::capture::shutdown::stop_owned_tun(pid, endpoint)')
-      < coreProcessService.indexOf('super::stop::stop_for_exit('),
-  'application exit should stop TUN before clearing the proxy and stopping the managed core process',
+    && coreProcessService.includes('super::stop::stop_for_exit(')
+    && coreStop.includes('super::retire::retire_owned_child(')
+    && coreRetirement.includes('crate::capture::shutdown::stop_owned_tun(')
+    && coreRetirement.indexOf('let tun_cleanup = cleanup(child.id());') >= 0
+    && coreRetirement.indexOf('let tun_cleanup = cleanup(child.id());')
+      < coreRetirement.indexOf('let exit = wait(child);'),
+  'application exit delegates to shared retirement, with TUN cleanup before the owned child lifetime is closed',
 );
 assert.ok(
   tunShutdown.includes('next.tun.enabled = Some(false);')

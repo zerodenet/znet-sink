@@ -81,7 +81,7 @@ fn child_cleanup_only_stops_owned_child_and_waits_for_reap() {
         .stdin(Stdio::piped())
         .spawn()
         .unwrap();
-    super::super::stop::stop_owned_child(&mut owned, std::time::Duration::from_secs(1)).unwrap();
+    super::super::retire::stop_owned_child(&mut owned, std::time::Duration::from_secs(1)).unwrap();
     assert!(owned.try_wait().unwrap().is_some());
     assert!(external.try_wait().unwrap().is_none());
     external.stdin.take();

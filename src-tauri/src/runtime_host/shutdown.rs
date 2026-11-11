@@ -58,34 +58,6 @@ pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
         persist_exit_tun_intent(&stop_app);
         state.runtime_host().run("shutdown", false, || {
             state.next_core_process_monitor_generation();
-            let owned = {
-                let process = lock(state.runtime_host().process(), "core_process")?;
-                process
-                    .child
-                    .as_ref()
-                    .zip(process.endpoint.as_ref())
-                    .map(|(child, endpoint)| (child.id(), endpoint.path.clone()))
-            };
-            if let Some((pid, endpoint)) = owned {
-                let cleanup = tauri::async_runtime::block_on(async {
-                    tokio::time::timeout(
-                        std::time::Duration::from_secs(4),
-                        crate::capture::shutdown::stop_owned_tun(pid, endpoint),
-                    )
-                    .await
-                });
-                let failure = match cleanup {
-                    Ok(Ok(())) => None,
-                    Ok(Err(error)) => Some(error.message),
-                    Err(_) => Some("TUN cleanup timed out".into()),
-                };
-                if let Some(failure) = failure {
-                    state.runtime_host().record_error(failure.clone());
-                    crate::services::file_logger::line(&format!(
-                        "shutdown: {failure}; continuing owned child cleanup"
-                    ));
-                }
-            }
             let cleanup_proxy = lock(state.app_config(), "app_config")
                 .map(|config| config.core.cleanup_proxy_on_exit)
                 .unwrap_or(true);
@@ -99,7 +71,7 @@ pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
     {
         state.runtime_host().record_error(error.clone());
         crate::services::file_logger::line(&format!(
-            "shutdown: {error}; retained child will close its lifetime pipe on drop"
+            "shutdown: {error}; managed runtime status retains the cleanup and exit outcome"
         ));
     }
 }

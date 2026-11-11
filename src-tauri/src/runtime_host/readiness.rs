@@ -1,4 +1,4 @@
-use std::process::Child;
+use super::child::ManagedChild as Child;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};

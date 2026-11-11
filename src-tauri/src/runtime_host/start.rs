@@ -13,6 +13,9 @@ fn start_inner(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<C
         let mut process = lock(state.runtime_host().process(), "core_process")?;
         refresh_locked_status(&mut process, state.inner())?;
         if process.child.is_some() {
+            if process.status.state == CoreProcessState::Failed {
+                process.ensure_spawn_allowed()?;
+            }
             return Ok(process.status.clone());
         }
         // Invalidate an older restart loop before bootstrap/validation can fail.
