@@ -125,8 +125,7 @@ pub(crate) fn validate_app_config_candidate(
     let (id, _) = policy_selection::saved_selections(state, &base)?;
     let (scoped, edited) =
         crate::configuration::local_edits::resolve(app_config, id.as_deref(), &base)?;
-    let enabled = scoped.routing.inject_common_rules
-        && (scoped.overrides.rules || edited.pointer("/route/rules").is_none());
+    let enabled = scoped.routing.inject_common_rules;
     let config = compose_rules_for(&edited, enabled, &profiles, scoped.overrides.rules)?;
     finalize_effective_config(
         state,
@@ -229,9 +228,14 @@ use crate::configuration::rules::{common_tag, eligible_profiles};
 pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
     let (scoped, _) = crate::configuration::preferences::current(state)?;
     let enabled = scoped.routing.inject_common_rules;
-    let eligible_count = {
+    let (eligible_count, custom_count) = {
         let profiles = common::lock(state.rule_sets(), "rule_set")?;
-        eligible_profiles(&profiles).count()
+        (
+            eligible_profiles(&profiles).count(),
+            eligible_profiles(&profiles)
+                .filter(|profile| !profile.built_in)
+                .count(),
+        )
     };
     let mode = {
         let profiles = common::lock(state.proxy_configs(), "proxy_config")?;
@@ -259,13 +263,18 @@ pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
     let inherited = active_content(state)?
         .is_some_and(|base| base.pointer("/route/rules").is_some())
         && !scoped.overrides.rules;
-    let effective = enabled && !inherited && mode == "rule" && eligible_count > 0;
-    let reason = if inherited {
-        Some("使用配置中的规则；未开启客户端规则追加".to_string())
-    } else if !enabled {
+    let selected_count = if inherited {
+        custom_count
+    } else {
+        eligible_count
+    };
+    let effective = enabled && mode == "rule" && selected_count > 0;
+    let reason = if !enabled {
         Some("公共规则注入已关闭".to_string())
     } else if mode != "rule" {
         Some("等待活动配置切换到规则模式".to_string())
+    } else if inherited && selected_count == 0 {
+        Some("使用配置中的规则；自定义公共规则启用后优先生效，内置规则需开启客户端追加".to_string())
     } else if eligible_count == 0 {
         Some("尚未启用公共规则".to_string())
     } else {
@@ -276,7 +285,7 @@ pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
         effective,
         mode: Some(mode),
         eligible_count,
-        injected_count: if effective { eligible_count } else { 0 },
+        injected_count: if effective { selected_count } else { 0 },
         reason,
     })
 }
@@ -456,8 +465,18 @@ fn compose_rules_for(
     force: bool,
 ) -> AppResult<Value> {
     if !force && base.pointer("/route/rules").is_some() {
-        crate::configuration::route_integrity::validate(base)?;
-        return Ok(base.clone());
+        // Enabling a user binding is an explicit local policy choice, even
+        // when source rules are inherited. Do not activate built-in defaults.
+        let custom = profiles
+            .iter()
+            .filter(|profile| !profile.built_in)
+            .cloned()
+            .collect::<Vec<_>>();
+        if eligible_profiles(&custom).next().is_none() {
+            crate::configuration::route_integrity::validate(base)?;
+            return Ok(base.clone());
+        }
+        return Ok(compose_with(base, enabled, &custom)?.config);
     }
     Ok(compose_with(base, enabled, profiles)?.config)
 }
@@ -521,6 +540,10 @@ async fn apply_if_running(state: &AppState, config: Option<Value>) -> AppResult<
 #[cfg(test)]
 #[path = "rule_overlay_dns_tests.rs"]
 mod dns_tests;
+
+#[cfg(test)]
+#[path = "rule_overlay_priority_tests.rs"]
+mod priority_tests;
 
 #[cfg(test)]
 mod tests {
@@ -764,11 +787,25 @@ mod tests {
         order: u32,
         action: CommonRuleAction,
     ) -> (RuleSetProfile, std::path::PathBuf) {
+        verified_profile_with_rules(
+            id,
+            order,
+            action,
+            json!([{"type":"domain_exact","value":format!("{id}.example.com")}]),
+        )
+    }
+
+    pub(super) fn verified_profile_with_rules(
+        id: &str,
+        order: u32,
+        action: CommonRuleAction,
+        rules: Value,
+    ) -> (RuleSetProfile, std::path::PathBuf) {
         let source = decode_json(
             serde_json::to_string(&json!({
                 "version": 1,
                 "name": id,
-                "rules": [{"type":"domain_exact","value":format!("{id}.example.com")}]
+                "rules": rules
             }))
             .unwrap()
             .as_bytes(),
@@ -797,7 +834,7 @@ mod tests {
     }
 
     #[test]
-    fn common_rules_follow_subscription_rules_in_binding_order_and_composition_is_idempotent() {
+    fn custom_rules_precede_subscription_rules_in_binding_order_and_composition_is_idempotent() {
         let (later, later_path) = verified_profile("later", 20, CommonRuleAction::Reject);
         let (first, first_path) = verified_profile("first", 10, CommonRuleAction::Direct);
         let base = json!({
@@ -811,9 +848,9 @@ mod tests {
         let composed = compose_with(&base, true, &[later, first]).unwrap();
         assert_eq!(composed.injected_count, 2);
         let rules = composed.config["route"]["rules"].as_array().unwrap();
-        assert_eq!(rules[0]["condition"]["tag"], "airport");
-        assert_eq!(rules[1]["action"]["type"], "direct");
-        assert_eq!(rules[2]["action"]["type"], "reject");
+        assert_eq!(rules[0]["action"]["type"], "direct");
+        assert_eq!(rules[1]["action"]["type"], "reject");
+        assert_eq!(rules[2]["condition"]["tag"], "airport");
         let recomposed = compose_with(&composed.config, true, &[]).unwrap();
         assert_eq!(
             recomposed.config["route"]["rules"]

@@ -66,7 +66,8 @@ pub(crate) fn compose_with(
         .unwrap_or_else(|| json!({ "type": "direct" }));
     let rule_sets = array_field(route, "rule_sets")?;
     let mut definitions = Vec::with_capacity(selected.len());
-    let mut rules = Vec::with_capacity(selected.len());
+    let mut custom_rules = Vec::new();
+    let mut builtin_rules = Vec::new();
     for profile in selected {
         let artifact = profile
             .artifact
@@ -98,16 +99,20 @@ pub(crate) fn compose_with(
                 rule["mode"] = mode.clone();
             }
         }
-        rules.push(rule);
+        if profile.built_in {
+            builtin_rules.push(rule);
+        } else {
+            custom_rules.push(rule);
+        }
     }
-    let injected_count = rules.len();
+    let injected_count = custom_rules.len() + builtin_rules.len();
     rule_sets.extend(definitions);
     let existing_rules = array_field(route, "rules")?;
-    // Subscription rules are usually more specific than GUI-wide rules
-    // (for example, an AI service group versus the broad built-in GFW
-    // domain set). Preserve those semantics by evaluating the subscription
-    // first and using common rules only as a fallback before `route.final`.
-    existing_rules.extend(rules);
+    // Explicit user bindings override the source policy. Broad built-in sets
+    // remain a fallback so they cannot shadow subscription service groups.
+    custom_rules.append(existing_rules);
+    custom_rules.extend(builtin_rules);
+    *existing_rules = custom_rules;
     Ok(ComposeResult {
         config,
         injected_count,

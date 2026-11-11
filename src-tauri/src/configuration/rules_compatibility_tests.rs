@@ -28,13 +28,13 @@ fn following_final_route_inherits_its_packet_or_flow_path_without_changing_sourc
         .config;
         assert_eq!(base, original);
         assert_eq!(result["outbounds"], base["outbounds"]);
-        assert_eq!(result["route"]["rules"][0], base["route"]["rules"][0]);
+        assert_eq!(result["route"]["rules"][1], base["route"]["rules"][0]);
         assert_eq!(
             result["route"]["auto_outbounds"],
             base["route"]["auto_outbounds"]
         );
         assert_eq!(
-            result["route"]["rules"][1].get("mode"),
+            result["route"]["rules"][0].get("mode"),
             mode.map(|m| json!(m)).as_ref()
         );
         let repeated = compose_with(
