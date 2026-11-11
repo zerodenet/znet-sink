@@ -1,13 +1,14 @@
 //! Atomic Windows process/job creation, with an explicit inherited-handle list.
 use super::job::Job;
 use std::{
+    fs::File,
     io,
     os::windows::{
         ffi::OsStrExt,
         io::{AsRawHandle, FromRawHandle, OwnedHandle},
         process::ExitStatusExt,
     },
-    process::{ChildStderr, ChildStdin, Command, ExitStatus},
+    process::{Command, ExitStatus},
 };
 use windows_sys::Win32::{
     Foundation::{
@@ -38,8 +39,10 @@ pub(crate) struct ManagedChild {
     pid: u32,
     status: Option<ExitStatus>,
     job: Job,
-    pub(crate) stdin: Option<ChildStdin>,
-    pub(crate) stderr: Option<ChildStderr>,
+    // CreatePipe returns synchronous handles. ChildStdin/ChildStderr require
+    // overlapped handles on Windows; using them here can stall completed I/O.
+    pub(crate) stdin: Option<File>,
+    pub(crate) stderr: Option<File>,
 }
 
 impl ManagedChild {

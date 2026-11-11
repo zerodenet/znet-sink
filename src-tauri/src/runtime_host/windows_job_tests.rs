@@ -50,6 +50,7 @@ fn process_fixture() {
             "中文 value with space"
         );
         assert_eq!(std::env::var("ZNET_Ä").unwrap(), "updated");
+        eprintln!("native stderr ready");
     }
     if mode == "root" {
         // The controlling parent releases this real launch gate only after
@@ -190,8 +191,15 @@ fn native_creation_round_trips_arguments_and_case_insensitive_unicode_environmen
         .env("znet_ä", "updated");
     let mut child = spawn(&mut command).unwrap();
     let members = peers(&listener, 1);
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut line = String::new();
+    stderr.read_line(&mut line).unwrap();
+    assert_eq!(line.trim(), "native stderr ready");
     child.stdin.take();
     assert!(child.wait().unwrap().success());
+    let mut tail = Vec::new();
+    stderr.read_to_end(&mut tail).unwrap();
+    assert!(tail.is_empty());
     members["args"].wait_exited();
 }
 
