@@ -25,17 +25,14 @@ pub async fn rule_set_upsert(
 ) -> AppResult<RuleSetProfile> {
     let state = app_handle.state::<AppState>();
 
-    let profile = rule_set::upsert(state, input).await?;
-    rule_overlay::reconcile_after_rule_change(app_handle).await?;
-    Ok(profile)
+    rule_set::upsert(state, input).await
 }
 
 #[tauri::command]
 pub async fn rule_set_remove(app_handle: AppHandle, id: String) -> AppResult<()> {
     let state = app_handle.state::<AppState>();
 
-    rule_set::remove(state, id)?;
-    rule_overlay::reconcile_after_rule_change(app_handle).await
+    rule_set::remove(state, id).await
 }
 
 #[tauri::command]

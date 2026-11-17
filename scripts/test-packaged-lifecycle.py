@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import socket
 import subprocess
@@ -29,6 +30,20 @@ def alive(pid):
         return result.returncode == 0 and not result.stdout.strip().startswith("Z")
     except ProcessLookupError:
         return False
+
+
+def verify_identity(app):
+    """Inspect the actual bundle without launching or changing installed apps."""
+    contents = app.parent.parent
+    with (contents / "Info.plist").open("rb") as stream:
+        info = plistlib.load(stream)
+    assert info["CFBundleIdentifier"] == "org.zerodenet.znetsink", info
+    assert info["CFBundleDisplayName"] == "ZNet Sink", info
+    assert info["CFBundleExecutable"] == "ZNet Sink", info
+    assert app == contents / "MacOS" / info["CFBundleExecutable"], app
+    assert os.access(app, os.X_OK), f"bundle executable is not runnable: {app}"
+    assert not (app.parent / "gui").exists(), "bundle still contains the old gui executable"
+    print("PASS: bundle display name, executable, identifier and executable permissions", flush=True)
 
 
 def cycle(app, root, label):
@@ -82,9 +97,15 @@ def cycle(app, root, label):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app-binary", type=Path, required=True)
-    parser.add_argument("--kernel-binary", type=Path, required=True)
+    parser.add_argument("--kernel-binary", type=Path)
+    parser.add_argument("--identity-only", action="store_true", help="inspect bundle metadata without launching")
     args = parser.parse_args()
     app = args.app_binary.resolve(strict=True)
+    verify_identity(app)
+    if args.identity_only:
+        return
+    if args.kernel_binary is None:
+        parser.error("--kernel-binary is required for lifecycle checks")
     kernel = args.kernel_binary.resolve(strict=True)
     before = subprocess.check_output(["scutil", "--proxy"])
     with tempfile.TemporaryDirectory(prefix="znet-smoke-", dir="/tmp") as directory:

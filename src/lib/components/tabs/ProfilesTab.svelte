@@ -357,14 +357,8 @@
     {:else}
       <div class="config-list">
         {#each filteredConfigs as config (config.id)}
-          <div class="config-row">
-            <button data-slot="surface-button"
-              type="button"
-              class="row-open"
-              onclick={() => openEdit(config)}
-              disabled={busy || Boolean(config.managedSource)}
-              aria-label={config.managedSource ? `插件托管代理配置 ${config.name}` : `编辑代理配置 ${config.name}`}
-            >
+          <div class="config-row" data-active={config.active}>
+            {#snippet summary()}
               <div class="row-main">
               <div class="row-top">
                 <div class="row-title">{config.name}</div>
@@ -388,7 +382,17 @@
                 {/if}
               </div>
               </div>
-            </button>
+            {/snippet}
+            {#if config.managedSource}<div class="row-open read-only">{@render summary()}</div>{:else}
+            <button data-slot="surface-button"
+              type="button"
+              class="row-open"
+              onclick={() => openEdit(config)}
+              disabled={busy}
+              aria-label={config.managedSource ? `插件托管代理配置 ${config.name}` : `编辑代理配置 ${config.name}`}
+            >
+              {@render summary()}
+            </button>{/if}
 
             <div class="row-actions">
               {#if canEdit}
@@ -653,9 +657,11 @@
     transition: background 0.12s ease;
   }
 
-  .config-row:hover {
-    background: var(--muted);
+  .config-row:has(.row-open:not(.read-only):hover), .config-row:focus-within {
+    background: color-mix(in srgb, var(--foreground) 3%, var(--card));
   }
+  .config-row[data-active='true'] {box-shadow:inset 2px 0 0 var(--foreground);}
+  .row-open.read-only {cursor:default;}
 
   .config-row:last-child {
     border-bottom: 0;

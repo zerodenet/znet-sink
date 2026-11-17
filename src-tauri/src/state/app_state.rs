@@ -41,7 +41,7 @@ pub struct AppState {
     rule_set_updates: Mutex<HashSet<String>>,
     logs: Mutex<Vec<LogEntry>>,
     traffic_sample: Mutex<Option<TrafficSample>>,
-    runtime_host: crate::runtime_host::Host,
+    runtime_host: Arc<crate::runtime_host::Host>,
     zero_features_cache: Mutex<Option<ZeroFeaturesCache>>,
     /// Set to `true` the moment shutdown begins. Long-lived background
     /// tasks (core-process watchdog, event streams) poll this to stop
@@ -109,7 +109,7 @@ impl AppState {
             rule_set_updates: Mutex::new(HashSet::new()),
             logs: Mutex::new(logs),
             traffic_sample: Mutex::new(None),
-            runtime_host: crate::runtime_host::Host::default(),
+            runtime_host: Arc::new(crate::runtime_host::Host::default()),
             zero_features_cache: Mutex::new(None),
             shutting_down: Arc::new(AtomicBool::new(false)),
         }
@@ -470,6 +470,20 @@ impl AppState {
 
     pub(crate) fn traffic_sample(&self) -> &Mutex<Option<TrafficSample>> {
         &self.traffic_sample
+    }
+
+    pub(crate) fn install_network_route_provider(&self) {
+        let host = Arc::downgrade(&self.runtime_host);
+        znet_client_capabilities::network::install_default_route_provider(move || {
+            if host
+                .upgrade()
+                .is_some_and(|host| host.network_proxy_ready())
+            {
+                znet_client_capabilities::network::Route::System
+            } else {
+                znet_client_capabilities::network::Route::Direct
+            }
+        });
     }
 
     pub(crate) fn runtime_host(&self) -> &crate::runtime_host::Host {

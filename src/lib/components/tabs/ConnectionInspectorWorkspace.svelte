@@ -24,6 +24,7 @@
   import ActionConfirmDialog from '$lib/components/ActionConfirmDialog.svelte';
   import ConnectionDetailsDrawer from '$lib/components/ConnectionDetailsDrawer.svelte';
   import * as Tabs from '$lib/components/AppTabs';
+  import * as Dialog from '$lib/components/ui/dialog';
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -58,6 +59,8 @@
   let exportPath = $state('');
   let filtersOpen = $state(false);
   let actionsOpen = $state(false);
+  let historyInfoOpen = $state(false);
+  let actionsTrigger = $state<HTMLButtonElement | null>(null);
 
   let livePaused = $state(false);
   let pausedSnapshot = $state<DisplayConnection[]>([]);
@@ -156,7 +159,8 @@
   const structuredFilterCount = $derived(
     Number(protocolFilter !== 'all')
       + Number(outboundFilter !== 'all')
-      + Number(activeTab === 'history' && resultFilter !== 'all'),
+      + Number(activeTab === 'history' && resultFilter !== 'all')
+      + Number(activeTab === 'history' && Boolean(capturedAfter || capturedBefore)),
   );
 
   function hasText(value: unknown): value is string {
@@ -209,6 +213,7 @@
     protocolFilter = 'all';
     outboundFilter = 'all';
     resultFilter = 'all';
+    if (activeTab === 'history') {capturedAfter = '';capturedBefore = '';}
   }
 
   function historySignature(): string {
@@ -772,6 +777,7 @@
           size="icon-sm"
           title="更多操作"
           aria-label="更多操作"
+          bind:ref={actionsTrigger}
           aria-haspopup="menu"
           aria-expanded={actionsOpen}
           onclick={(event) => {
@@ -805,6 +811,9 @@
                 关闭全部连接
               </Button>
             {:else}
+              <Button variant="ghost" size="sm" class="w-full justify-start" role="menuitem" disabled={exporting || historyLoading || Boolean(historyError)} onclick={()=>{actionsOpen=false;void exportHistory();}}>{exporting?'导出中…':'导出筛选记录'}</Button>
+              {#if exportPath}<Button variant="ghost" size="sm" class="w-full justify-start" role="menuitem" onclick={()=>{actionsOpen=false;void revealExport();}}>打开导出位置</Button>{/if}
+              <Button variant="ghost" size="sm" class="w-full justify-start" role="menuitem" onclick={()=>{actionsOpen=false;historyInfoOpen=true;}}>记录信息</Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -825,32 +834,6 @@
       </div>
     </div>
   </div>
-
-  {#if activeTab === 'history'}
-    <ConnectionHistoryCoverage summary={historySummary} />
-    <div class="flex flex-wrap items-end gap-2 border-b border-border px-3 py-2">
-      <label class="min-w-0 text-[10.5px] text-muted-foreground">记录时间从
-        <Input type="datetime-local" class="mt-1 h-8 w-full text-xs" aria-label="记录开始时间" bind:value={capturedAfter} />
-      </label>
-      <label class="min-w-0 text-[10.5px] text-muted-foreground">至
-        <Input type="datetime-local" class="mt-1 h-8 w-full text-xs" aria-label="记录结束时间" bind:value={capturedBefore} />
-      </label>
-      {#if capturedAfter || capturedBefore}
-        <Button variant="ghost" size="sm" onclick={() => { capturedAfter = ''; capturedBefore = ''; }}>清除时间</Button>
-      {/if}
-      <Button variant="outline" size="sm" disabled={exporting || historyLoading || Boolean(historyError)} onclick={exportHistory}>
-        {exporting ? '导出中…' : '导出筛选记录'}
-      </Button>
-      {#if exportPath}
-        <Button variant="ghost" size="sm" onclick={revealExport}>打开导出位置</Button>
-      {/if}
-      <span class="basis-full break-all text-[10px] text-muted-foreground">{exportPath || '导出全部符合筛选的本地记录，包含地址、进程和路由信息。'}</span>
-    </div>
-  {/if}
-
-  {#if activeTab === 'live'}
-    <p class="border-b border-border px-3 py-1 text-[10px] text-muted-foreground">实时视图最多保留 500 条、每次展示前 200 条；不是所有连接的完整存档。</p>
-  {/if}
 
   {#if activeTab === 'live' && !canCloseConnections}
     <div class="border-b border-border bg-amber-500/5 px-3 py-2 text-[10.5px] text-amber-700 dark:text-amber-400" role="status">
@@ -885,6 +868,9 @@
       />
 
       {#if activeTab === 'history'}
+        <label class="min-w-0 text-[10.5px] text-muted-foreground">从<Input type="datetime-local" class="mt-1 h-8 w-full text-xs" aria-label="记录开始时间" bind:value={capturedAfter}/></label>
+        <label class="min-w-0 text-[10.5px] text-muted-foreground">至<Input type="datetime-local" class="mt-1 h-8 w-full text-xs" aria-label="记录结束时间" bind:value={capturedBefore}/></label>
+        {#if capturedAfter || capturedBefore}<Button variant="ghost" size="sm" onclick={()=>{capturedAfter='';capturedBefore='';}}>清除时间</Button>{/if}
         <ClearableSelect
           bind:value={resultFilter}
           class="w-full sm:w-[150px]"
@@ -1041,6 +1027,14 @@
     onrequestterminate={requestSingleTerminate}
   />
 </Tabs.Root>
+
+<Dialog.Root bind:open={historyInfoOpen}>
+  <Dialog.Content class="sm:max-w-[520px]" onCloseAutoFocus={event=>{if(actionsTrigger?.isConnected){event.preventDefault();actionsTrigger.focus();}}}>
+    <Dialog.Header><Dialog.Title>记录信息</Dialog.Title><Dialog.Description>本地连接记录的范围与保留状态。</Dialog.Description></Dialog.Header>
+    <Dialog.Body><ConnectionHistoryCoverage summary={historySummary}/></Dialog.Body>
+    <Dialog.Footer><Button variant="outline" onclick={()=>historyInfoOpen=false}>关闭</Button></Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
 
 <ActionConfirmDialog
   open={Boolean(singleConfirmConnection)}

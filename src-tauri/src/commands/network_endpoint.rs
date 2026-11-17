@@ -93,6 +93,21 @@ pub async fn gui_user_endpoints_save(
     crate::configuration::user_endpoints::validate(&endpoints)?;
     let mut next = previous.clone();
     next.user_endpoints = endpoints;
+    for rule in common::lock(state.rule_sets(), "rule_set")?.iter() {
+        if let Some(crate::models::rule_set::CommonRuleAction::Endpoint(tag)) =
+            rule.common_binding.as_ref().map(|b| &b.action)
+        {
+            if previous.user_endpoints.iter().any(|e| e["tag"] == *tag)
+                && !next.user_endpoints.iter().any(|e| e["tag"] == *tag)
+            {
+                return Err(AppError::invalid_argument(format!(
+                    "端点 {tag} 仍被路由规则“{}”引用，请先调整引用",
+                    rule.name
+                )));
+            }
+        }
+    }
+
     // Compose against raw material, including while offline. Never write the
     // merged definitions back into the subscription or active source profile.
     let (id, source) = crate::configuration::local_edits::context(state.inner())?;

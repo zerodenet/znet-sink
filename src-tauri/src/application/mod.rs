@@ -153,6 +153,7 @@ pub fn run() {
             // capture preference. Do this before the UI or auto-connect can
             // consume a stale ON value after a crash/updater relaunch.
             let state = app.state::<AppState>();
+            state.install_network_route_provider();
             let reset = (|| {
                 let mut config = crate::services::common::lock(state.app_config(), "app_config")?;
                 crate::capture::intent::begin_lifetime(

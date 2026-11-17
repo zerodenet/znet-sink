@@ -46,7 +46,7 @@
   });
 </script>
 
-<div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
+{#if selectedPanel!=='endpoints-shell'}<div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>{/if}
 {#if selectedPanel === 'plugins-shell'}
   <div class="h-dvh overflow-hidden"><PluginsWorkspaceFixture /></div>
 {:else if selectedPanel === 'endpoints-shell'}
@@ -67,7 +67,7 @@
     <Switch aria-label="测试开关" />
   </section>
   <div class="flex h-[650px] min-h-0 flex-col">
-    {#if selectedPanel === 'capabilities'}<CapabilitiesTab />{:else if selectedPanel === 'plugins'}<PluginsTab />{:else if selectedPanel === 'connections'}<ConnectionInspectorWorkspace />{:else if selectedPanel === 'nodes'}<NodesTab />{:else if selectedPanel === 'dns'}<DnsSettingsPanel />{:else if selectedPanel === 'url-test'}<UrlTestSettingsPanel />{:else if selectedPanel === 'runtime-network'}<RuntimeNetworkSettingsPanel />{:else if selectedPanel === 'tools'}<DiagnosticsPanel />{:else if selectedPanel === 'modules'}<ModuleDiagnosticsFixture />{:else if selectedPanel === 'settings' || selectedPanel === 'logs'}<SettingsLogsFixture />{:else if selectedPanel === 'mode-overview'}<ModeOverviewFixture />{:else if selectedPanel === 'overview'}<OverviewFixture />{:else if selectedPanel === 'profiles'}<ProfilesTab />{:else if selectedPanel === 'subscriptions'}<SubscriptionsTab />{:else if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
+    {#if selectedPanel === 'capabilities'}<CapabilitiesTab />{:else if selectedPanel === 'plugins'}<PluginsTab />{:else if selectedPanel === 'connections'}<ConnectionInspectorWorkspace />{:else if selectedPanel === 'nodes'}<NodesTab />{:else if selectedPanel === 'dns'}<DnsSettingsPanel />{:else if selectedPanel === 'url-test'}<UrlTestSettingsPanel />{:else if selectedPanel === 'runtime-network'}<RuntimeNetworkSettingsPanel />{:else if selectedPanel === 'tools'}<DiagnosticsPanel />{:else if selectedPanel === 'modules'}<ModuleDiagnosticsFixture />{:else if selectedPanel === 'settings' || selectedPanel === 'logs'}<SettingsLogsFixture />{:else if selectedPanel === 'mode-overview'}<ModeOverviewFixture />{:else if selectedPanel === 'overview'}<OverviewFixture />{:else if selectedPanel === 'profiles'}<ProfilesTab />{:else if selectedPanel === 'subscriptions'}<SubscriptionsTab />{:else if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab initialSection={new URLSearchParams(window.location.search).get('rules-view')==='routes'?'routes':'sets'}/>{/if}
   </div>
   <output aria-label="保存结果">{saved}</output>
 </main>

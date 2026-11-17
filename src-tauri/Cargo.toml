@@ -1,5 +1,6 @@
 [package]
 name = "gui"
+default-run = "znet-sink"
 version = "0.0.2-rc.202611111217"
 description = "ZNet Sink - 零域网络代理客户端"
 authors = ["ZeroDenet <zerodenet.org>"]
@@ -7,6 +8,10 @@ license = "MPL-2.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "znet-sink"
+path = "src/main.rs"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -36,6 +41,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache"] }
 tokio = { version = "1", features = ["sync", "time", "macros"] }
 sha2 = "0.10"
+regex = "1"
 getrandom = "0.3"
 zeroize = "1"
 ring = "0.17"
@@ -74,6 +80,9 @@ tokio = { version = "1", features = ["rt", "test-util", "macros"] }
 members = ["crates/client-capabilities", "crates/client-core", "crates/engine-client", "crates/plugin-sandbox"]
 default-members = [".", "crates/client-core", "crates/engine-client"]
 resolver = "2"
+
+[profile.release]
+strip = "symbols"
 
 [features]
 default = ["tool-dns", "tool-route", "tool-node-probe"]

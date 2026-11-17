@@ -82,6 +82,8 @@ pub enum CommonRuleAction {
     Proxy,
     Direct,
     Reject,
+    /// An explicit endpoint route is independent of public rule injection.
+    Endpoint(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -98,6 +100,8 @@ pub struct RuleSetProvenance {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommonRuleBinding {
+    #[serde(default)]
+    pub profile_id: Option<String>,
     pub enabled: bool,
     pub action: CommonRuleAction,
     pub order: u32,
@@ -106,6 +110,8 @@ pub struct CommonRuleBinding {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommonRuleBindingInput {
+    #[serde(default)]
+    pub profile_id: Option<String>,
     pub rule_set_id: String,
     pub enabled: bool,
     pub action: CommonRuleAction,
@@ -160,6 +166,8 @@ pub struct ZrsArtifact {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleSetUpsert {
+    #[serde(default)]
+    pub common_binding: Option<CommonRuleBinding>,
     pub id: Option<String>,
     pub name: String,
     pub enabled: Option<bool>,

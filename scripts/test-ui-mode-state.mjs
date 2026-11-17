@@ -103,7 +103,8 @@ test('Lite opens hidden rule management and returns to the original DNS settings
     actions: [], features: [],
   }));
   store.uiMode = 'lite'; store.activeTab = 'settings'; store.settingsSection = 'dns';
-  store.openTab('rules');
+  store.openRuleSets();
+  assert.equal(store.rulesSection,'sets');
   assert.equal(store.uiMode, 'lite'); assert.equal(store.activeTab, 'rules');
   await store.refreshInteractionSurface();
   assert.equal(store.activeTab, 'rules'); assert.equal(store.isNavVisible('rules'), false);

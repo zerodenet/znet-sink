@@ -52,7 +52,7 @@ fn arbitrary_networks_are_never_widened_to_native_wildcards() {
     assert_eq!(runtime["mode"]["type"], "global");
     assert_eq!(runtime["route"]["bypass"].as_array().unwrap().len(), 4);
     assert_eq!(runtime["runtime"]["tun"]["exclude_cidrs"][0], "16.0.0.0/8");
-    assert_eq!(runtime["runtime"]["dns"]["dispatch"][0]["server"], "system");
+    assert!(runtime["runtime"]["dns"].get("dispatch").is_none());
     assert!(runtime["runtime"]["dns"]["reverse_mapping"].is_object());
 }
 
@@ -151,4 +151,25 @@ fn saved_legacy_preset_expands_once_and_preserves_custom_rules() {
     let snapshot = app.clone();
     normalize(&mut app).unwrap();
     assert_eq!(app, snapshot);
+}
+
+#[test]
+fn domain_bypasses_preserve_explicit_private_and_local_dns_dispatch() {
+    let mut app = AppConfig::default();
+    app.bypass = Some(AppBypassConfig {
+        local_networks: false,
+        rules: vec!["*.starmerx.com".into(), "*.local".into(), "<local>".into()],
+    });
+    let dns = json!({"servers":{"public":{"type":"udp","host":"223.5.5.5"},
+        "enterprise":{"type":"udp","host":"192.168.1.180","detour":"Starters"}},
+        "default_server":"public", "dispatch":[
+            {"condition":{"type":"domain_suffix","values":["starmerx.com", "local"]},"server":"enterprise"}],
+        "answer":{"type":"fake_ip","cidr":"198.18.0.0/15"}});
+    let mut config = json!({"runtime":{"dns":dns},"route":{"final":{"type":"direct"}}});
+    apply(&mut config, &app).unwrap();
+    let mut expected = dns;
+    expected["reverse_mapping"] = json!({});
+    assert_eq!(config["runtime"]["dns"], expected);
+    apply(&mut config, &app).unwrap();
+    assert_eq!(config["runtime"]["dns"], expected);
 }

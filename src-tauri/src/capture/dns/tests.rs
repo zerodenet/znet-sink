@@ -68,7 +68,7 @@ fn recommended_dns_remains_independent_after_host_capture() {
     app.overrides.dns = true;
     let source = json!({"outbounds":[{"tag":"proxy"}],
         "route":{"final":{"type":"route","outbound":"proxy"}}});
-    let dns = super::preflight::effective_dns(&app, &source).unwrap();
+    let dns = effective_dns(&app, &source).unwrap();
     explicit_upstreams(&dns, "10.66.0.2").unwrap();
     for tag in ["alidns", "114dns"] {
         assert!(dns["servers"][tag].get("detour").is_none());
@@ -86,7 +86,7 @@ fn imported_private_dns_uses_endpoint_and_keeps_bootstrap_independent_for_captur
         "protocol":{"type":"wireguard","peers":[{"allowed_ips":["0.0.0.0/0"]}]},
         "dns":{"servers":["10.77.0.1"],"use_as_default":true}
     })];
-    let dns = super::preflight::effective_dns(&app, &json!({})).unwrap();
+    let dns = effective_dns(&app, &json!({})).unwrap();
     explicit_upstreams(&dns, "10.66.0.2").unwrap();
     let default = dns["default_server"].as_str().unwrap();
     assert_eq!(dns["servers"][default]["host"], "10.77.0.1");
@@ -97,7 +97,7 @@ fn imported_private_dns_uses_endpoint_and_keeps_bootstrap_independent_for_captur
     assert_ne!(dns["servers"][node]["type"], "system");
     // The imported server itself must also pass the actual host-capture gate.
     app.user_endpoints[0]["dns"]["servers"] = json!(["10.66.0.2"]);
-    let dns = super::preflight::effective_dns(&app, &json!({})).unwrap();
+    let dns = effective_dns(&app, &json!({})).unwrap();
     assert!(explicit_upstreams(&dns, "10.66.0.2").is_err());
 }
 
@@ -119,7 +119,7 @@ fn independent_literal_doh_profile_is_preserved_and_accepted_for_capture() {
     assert_eq!(profile, before);
     let app = crate::models::app_config::AppConfig::default();
     let source = json!({"runtime":{"dns":value}});
-    let dns = super::preflight::effective_dns(&app, &source).unwrap();
+    let dns = effective_dns(&app, &source).unwrap();
     assert_eq!(dns, source["runtime"]["dns"]);
     explicit_upstreams(&dns, "10.66.0.2").unwrap();
 }
@@ -129,15 +129,15 @@ fn disabled_global_dns_cannot_authorize_capture_using_a_saved_configuration() {
     let mut app = crate::models::app_config::AppConfig::default();
     app.dns.enabled = false;
     assert!(app.dns.config.is_some());
-    assert!(super::preflight::effective_dns(&app, &json!({})).is_err());
+    assert!(effective_dns(&app, &json!({})).is_err());
     let source = json!({"runtime":{"dns":{"servers":{"a":{"type":"udp","host":"1.1.1.1"}},"default_server":"a"}}});
     app.overrides.dns = false;
     assert_eq!(
-        super::preflight::effective_dns(&app, &source).unwrap(),
+        effective_dns(&app, &source).unwrap(),
         source["runtime"]["dns"]
     );
     app.overrides.dns = true;
-    assert!(super::preflight::effective_dns(&app, &source).is_err());
+    assert!(effective_dns(&app, &source).is_err());
 }
 
 #[test]
@@ -228,4 +228,49 @@ fn failed_installation_is_visible_and_not_repeated_without_recovery() {
     .is_err());
     stop(&mut state).unwrap();
     transition(&mut state, next, |_| Ok(Guard)).unwrap();
+}
+
+fn effective_dns(
+    app: &crate::models::app_config::AppConfig,
+    source: &serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    let config = crate::configuration::composition::finalize(
+        source,
+        source.clone(),
+        &crate::configuration::composition::Inputs {
+            source_profile_id: None,
+            app: app.clone(),
+            supports_tolerance: false,
+            selections: Default::default(),
+        },
+    )?
+    .config;
+    config
+        .pointer("/runtime/dns")
+        .cloned()
+        .ok_or_else(|| AppError::internal("DNS disabled"))
+}
+
+#[test]
+fn final_composition_with_default_bypasses_has_no_hidden_system_upstream() {
+    let mut app = crate::models::app_config::AppConfig::default();
+    app.dns.enabled = true;
+    app.overrides.dns = true;
+    app.overrides.bypass = true;
+    app.bypass = Some(crate::models::app_config::AppBypassConfig {
+        local_networks: true,
+        rules: vec!["*.starmerx.com".into(), "*.local".into(), "<local>".into()],
+    });
+    let dns = effective_dns(
+        &app,
+        &json!({"outbounds":[{"tag":"proxy"}],
+        "route":{"final":{"type":"route","outbound":"proxy"}}}),
+    )
+    .unwrap();
+    explicit_upstreams(&dns, "10.66.0.2").unwrap();
+    assert!(dns["servers"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|value| value["type"] != "system"));
 }

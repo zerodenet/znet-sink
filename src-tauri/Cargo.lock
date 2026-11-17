@@ -1778,6 +1778,7 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "objc2-user-notifications",
+ "regex",
  "reqwest 0.12.28",
  "ring",
  "rusqlite",

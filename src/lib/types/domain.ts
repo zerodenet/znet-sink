@@ -157,9 +157,9 @@ export interface RuleSetProvenance {
   irSha256: string;
 }
 
-export type CommonRuleAction = 'final' | 'proxy' | 'direct' | 'reject';
-export interface CommonRuleBinding { enabled: boolean; action: CommonRuleAction; order: number; }
-export interface CommonRuleBindingInput { ruleSetId: string; enabled: boolean; action: CommonRuleAction; order: number; }
+export type CommonRuleAction = 'final' | 'proxy' | 'direct' | 'reject' | { endpoint: string };
+export interface CommonRuleBinding { profileId?: string; enabled: boolean; action: CommonRuleAction; order: number; }
+export interface CommonRuleBindingInput { profileId?: string; ruleSetId: string; enabled: boolean; action: CommonRuleAction; order: number; }
 export interface CommonRuleInjectionStatus {
   enabled: boolean;
   effective: boolean;
@@ -201,6 +201,7 @@ export interface ZrsArtifact {
 }
 
 export interface RuleSetUpsert {
+  commonBinding?: CommonRuleBinding;
   id?: string;
   name: string;
   enabled?: boolean;

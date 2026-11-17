@@ -361,8 +361,9 @@ pub(crate) fn view(state: &AppState) -> AppResult<Value> {
         })
         .collect();
     let edited = app.client_edits.clone().unwrap_or_default();
+    let endpoint_dns_servers = super::endpoint_dns::summary(&settings["dns"], &app.user_endpoints)?;
     Ok(
-        json!({"profileId":id,"settings":settings,"editedFields":edited.keys().collect::<Vec<_>>(),
+        json!({"profileId":id,"settings":settings,"endpointDnsServers":endpoint_dns_servers,"editedFields":edited.keys().collect::<Vec<_>>(),
         "sourceEndpoint":super::preferences::endpoint_for(&saved,&base).ok(),"sourceBypass":base.pointer("/route/bypass"),"groupTolerances":tolerances}),
     )
 }

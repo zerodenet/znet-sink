@@ -88,6 +88,24 @@ test('rejected save retains the dialog draft without success or automatic replay
   await expect(page.getByRole('article', { name: '端点 my-wg', exact: true })).toHaveCount(0);
 });
 
+test('DNS save rejection stays visible beside the footer without losing the draft or replaying', async ({page},testInfo)=>{
+  await page.setViewportSize({width:650,height:500});
+  const dialog=await fillEndpoint(page,'conflicting');
+  await dialog.getByRole('textbox',{name:'DNS 服务器',exact:true}).fill('192.168.1.180');
+  await dialog.getByRole('switch',{name:'用作默认 DNS',exact:true}).click();
+  await page.evaluate(()=>{(window as any).__saveAttempts=0;window.addEventListener('fixture-library-save-attempt',()=>{(window as any).__saveAttempts++;});});
+  await dialog.getByRole('button',{name:'保存并应用',exact:true}).click();
+  const footer=dialog.locator('[data-slot=dialog-footer]');
+  await expect(footer.getByRole('alert')).toContainText('名称冲突');
+  await expect(footer.getByRole('alert')).toBeInViewport();
+  await expect(footer.getByRole('button',{name:'保存并应用',exact:true})).toBeInViewport();
+  await expect(dialog.getByRole('textbox',{name:'DNS 服务器',exact:true})).toHaveValue('192.168.1.180');
+  await expect(dialog.getByRole('switch',{name:'用作默认 DNS',exact:true})).toHaveAttribute('aria-checked','false');
+  expect(await page.evaluate(()=>(window as any).__saveAttempts)).toBe(1);
+  expect(await dialog.locator('[data-slot=dialog-body]').evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+  await dialog.screenshot({path:testInfo.outputPath('endpoint-save-error-footer.png'),animations:'disabled'});
+});
+
 test('long peer forms scroll inside the dialog while save and cancel remain visible', async ({ page }) => {
   await page.setViewportSize({ width: 420, height: 650 });
   const dialog = await fillEndpoint(page);

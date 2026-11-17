@@ -1,4 +1,4 @@
-import { check, Update } from '@tauri-apps/plugin-updater';
+import { Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
@@ -100,10 +100,11 @@ class UpdaterService {
 
     try {
       void appendLog({ source: 'app', level: 'info', message: `正在检查更新… (当前 v${this.currentVersion})` });
-      const update = await tracedOperation('update', 'update.check', () => check(), {
+      const metadata = await tracedOperation('update', 'update.check', () => invoke<AppUpdateMetadata | null>('app_check_update'), {
         currentVersion: this.currentVersion,
       });
-      if (update) {
+      if (metadata) {
+        const update = new Update(metadata);
         this.replacePendingUpdate(update);
         this.updateAvailable = true;
         this.latestVersion = update.version;

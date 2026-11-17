@@ -68,3 +68,5 @@ pub(crate) mod material;
 pub(crate) mod endpoints;
 
 pub(crate) mod user_endpoints;
+
+pub(crate) mod endpoint_routes;

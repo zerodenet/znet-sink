@@ -25,26 +25,47 @@ pub async fn app_check_release(
     webview: Webview,
     tag_name: String,
 ) -> AppResult<Option<AppUpdateMetadata>> {
-    let expected_version = release_version(&tag_name)?;
-    let endpoint = release_manifest_endpoint(&tag_name)?;
-    let updater = webview
+    check_update(webview, Some(tag_name)).await
+}
+
+#[tauri::command]
+pub async fn app_check_update(webview: Webview) -> AppResult<Option<AppUpdateMetadata>> {
+    check_update(webview, None).await
+}
+
+async fn check_update(
+    webview: Webview,
+    tag_name: Option<String>,
+) -> AppResult<Option<AppUpdateMetadata>> {
+    let mut builder = webview
         .updater_builder()
-        .endpoints(vec![endpoint])
-        .map_err(updater_error)?
-        // A manually selected release may be older than the running build.
-        // Equal versions are still rejected so an accidental reinstall is
-        // never presented as an update.
-        .version_comparator(|current, release| release.version != current)
-        .build()
-        .map_err(updater_error)?;
+        .timeout(std::time::Duration::from_secs(30));
+    let expected = if let Some(tag) = &tag_name {
+        builder = builder
+            .endpoints(vec![release_manifest_endpoint(tag)?])
+            .map_err(updater_error)?
+            .version_comparator(|current, release| release.version != current);
+        Some(release_version(tag)?)
+    } else {
+        None
+    };
+    use znet_client_capabilities::network::{default_route, Route};
+    builder = match default_route() {
+        Route::Direct | Route::Default => builder.no_proxy(),
+        Route::System => builder,
+        Route::Proxy(proxy) => builder
+            .proxy(Url::parse(&proxy).map_err(|_| AppError::invalid_argument("更新代理地址无效"))?),
+    };
+    let updater = builder.build().map_err(updater_error)?;
 
     let Some(update) = updater.check().await.map_err(updater_error)? else {
         return Ok(None);
     };
-    if update.version != expected_version.to_string() {
+    if let Some(expected_version) = expected.filter(|version| update.version != version.to_string())
+    {
         return Err(AppError::conflict(
             "app_release",
-            tag_name,
+            tag_name.unwrap_or_default(),
             format!(
                 "selected release manifest announces v{} instead of v{expected_version}",
                 update.version

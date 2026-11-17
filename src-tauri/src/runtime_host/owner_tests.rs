@@ -87,3 +87,39 @@ fn child_cleanup_only_stops_owned_child_and_waits_for_reap() {
     external.stdin.take();
     external.wait().unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn network_route_requires_live_ready_owned_child_and_never_waits_on_lifecycle_lock() {
+    use std::process::{Command, Stdio};
+    let host = Host::default();
+    assert!(!host.network_proxy_ready());
+    {
+        let mut process = host.process().lock().unwrap();
+        assert!(!host.network_proxy_ready());
+        process.child = Some(
+            Command::new("sh")
+                .args(["-c", "read line"])
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        process.endpoint = Some(crate::models::core::CoreEndpoint {
+            transport: "unix".into(),
+            path: "/unused-network-route-test.sock".into(),
+        });
+        process.status.state = CoreProcessState::Starting;
+    }
+    assert!(!host.network_proxy_ready());
+    host.process().lock().unwrap().status.state = CoreProcessState::Running;
+    assert!(host.network_proxy_ready());
+    {
+        let mut process = host.process().lock().unwrap();
+        let child = process.child.as_mut().unwrap();
+        child.stdin.take();
+        child.wait().unwrap();
+    }
+    // Cached Running must not keep a dead core eligible.
+    assert!(!host.network_proxy_ready());
+    host.process().lock().unwrap().child.take();
+}

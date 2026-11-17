@@ -3,6 +3,7 @@ use crate::errors::{AppError, AppResult};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::IpAddr;
+mod references;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,7 +76,46 @@ fn server_tag(tag: &str, index: usize) -> String {
         Sha256::digest(tag.as_bytes())
     )
 }
+
+/// Project the same imported resolvers as composition without persisting them
+/// into editable base DNS. Only public server facts leave this boundary.
+pub(crate) fn summary(base_dns: &Value, rows: &[Value]) -> AppResult<Vec<Value>> {
+    let mut config = json!({});
+    if base_dns["enabled"] == true && base_dns["config"].is_object() {
+        config = json!({"runtime":{"dns":base_dns["config"]}});
+    }
+    project(&mut config, rows)?;
+    let mut entries = Vec::new();
+    for row in rows
+        .iter()
+        .filter(|row| row["enabled"] != false && row["directions"]["outbound"] != false)
+    {
+        let Some(preference) = parse(row)? else {
+            continue;
+        };
+        let Some(tag) = row["tag"].as_str() else {
+            continue;
+        };
+        for index in 0..preference.servers.len() {
+            let id = server_tag(tag, index);
+            if let Some(server) = config
+                .pointer("/runtime/dns/servers")
+                .and_then(|s| s.get(&id))
+            {
+                entries.push(json!({"id":id,"endpoint":tag,"server":server,
+                    "isDefault":config.pointer("/runtime/dns/default_server")==Some(&json!(id))}));
+            }
+        }
+    }
+    Ok(entries)
+}
+
 pub(crate) fn apply(config: &mut Value, rows: &[Value]) -> AppResult<()> {
+    project(config, rows)?;
+    references::validate(config)
+}
+
+fn project(config: &mut Value, rows: &[Value]) -> AppResult<()> {
     validate(rows)?;
     let active: Vec<_> = rows
         .iter()

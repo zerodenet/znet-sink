@@ -156,7 +156,10 @@ fn unresponsive_owned_child_is_terminated_and_reaped_without_touching_another_pr
 
 #[test]
 fn confirmed_crashed_child_does_not_receive_a_second_tun_cleanup() {
-    let mut owned = Fixture::spawn(false);
+    // This case requires a forced crash, not a race with the fixture's normal
+    // parent-EOF exit. Keep its real control worker alive until the kill.
+    let mut owned = Fixture::spawn(true);
+    owned.ping();
     owned.child.kill().unwrap();
     owned.child.wait().unwrap();
     let retirement = retire_with_cleanup(&mut owned.child, Duration::ZERO, |_| {

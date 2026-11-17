@@ -27,8 +27,7 @@
 </script>
 <div class="grid gap-2">
   <Input bind:ref={picker} type="file" accept=".conf,.ini" class="sr-only" aria-label="从文件填写 WireGuard" disabled={disabled || busy} onchange={select} />
-  <Button type="button" variant="outline" disabled={disabled || busy} onclick={() => picker?.click()}>从 .conf 文件填写</Button>
-  <p class="text-xs text-muted-foreground">选择配置文件可替换下方连接参数，保留当前端点名称；保存前可继续修改。</p>
+  <Button type="button" variant="outline" size="sm" class="justify-self-start" disabled={disabled || busy} onclick={() => picker?.click()}>从 .conf 文件填写</Button>
   {#if error}<p role="alert" class="text-xs text-destructive">{error}</p>{/if}
   {#each warnings as warning}<p role="note" class="text-xs text-muted-foreground">{warning}</p>{/each}
 </div>

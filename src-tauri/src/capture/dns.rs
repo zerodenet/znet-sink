@@ -15,6 +15,7 @@ mod controller;
 mod helper;
 mod platform;
 mod preflight;
+mod verification;
 pub(crate) use controller::spawn;
 #[cfg(test)]
 mod tests;

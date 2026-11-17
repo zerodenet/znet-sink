@@ -137,14 +137,8 @@ pub(crate) fn parse_tun_status(value: &Value) -> AppResult<GuiTunStatus> {
         tag: parsing::string_at(value, &["tag"]),
         healthy,
         auto_route: bool_at(value, &["auto_route", "autoRoute"]).unwrap_or(false),
-        include_cidrs: value
-            .get("include_cidrs")
-            .or_else(|| value.get("includeCidrs"))
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
-        exclude_cidrs: value
-            .get("exclude_cidrs")
-            .or_else(|| value.get("excludeCidrs"))
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        include_cidrs: Some(tun_route_list(value, "include_cidrs", "includeCidrs")?),
+        exclude_cidrs: Some(tun_route_list(value, "exclude_cidrs", "excludeCidrs")?),
         dual_stack: bool_at(value, &["dual_stack", "dualStack"]).unwrap_or(false),
         strict_route: bool_at(value, &["strict_route", "strictRoute"]).unwrap_or(false),
         dns_hijack: bool_at(value, &["dns_hijack", "dnsHijack"]).unwrap_or(false),
@@ -191,6 +185,19 @@ pub(crate) fn parse_tun_status(value: &Value) -> AppResult<GuiTunStatus> {
     };
     status.host_dns = Some(crate::capture::dns::status(&status));
     Ok(status)
+}
+
+fn tun_route_list(value: &Value, snake: &str, camel: &str) -> AppResult<Vec<String>> {
+    // TunStatusSnapshot omits empty Vecs on the wire. Missing means empty;
+    // an explicit malformed value must still fail before a capture mutation.
+    value.get(snake).or_else(|| value.get(camel)).map_or_else(
+        || Ok(Vec::new()),
+        |value| {
+            serde_json::from_value(value.clone()).map_err(|_| {
+                AppError::internal(format!("TUN status {snake} must be a string list"))
+            })
+        },
+    )
 }
 
 fn parse_tun_family_egress(
@@ -355,9 +362,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_route_metadata_is_not_mistaken_for_an_empty_exclusion_list() {
-        let status = parse_tun_status(&json!({"running": true})).unwrap();
-        assert!(status.include_cidrs.is_none());
-        assert!(status.exclude_cidrs.is_none());
+    fn malformed_route_metadata_is_not_mistaken_for_empty_route_lists() {
+        for key in ["include_cidrs", "exclude_cidrs"] {
+            for invalid in [json!(null), json!("unknown"), json!([1])] {
+                let mut wire = json!({"running":true});
+                wire[key] = invalid;
+                assert!(parse_tun_status(&wire).is_err());
+            }
+        }
     }
 }

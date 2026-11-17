@@ -83,7 +83,7 @@ pub fn get_with_diagnostics(
             max_bytes,
             response_headers,
             follow: true,
-            route: Route::System,
+            route: Route::Default,
         },
         Some(timeout),
         &mut transport,

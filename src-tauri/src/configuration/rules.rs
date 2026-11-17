@@ -28,12 +28,6 @@ pub(crate) fn compose_with(
         GuiProxyMode::Rule => "rule".to_string(),
         GuiProxyMode::Direct => "direct".to_string(),
     });
-    if !enabled {
-        return Ok(ComposeResult {
-            config,
-            injected_count: 0,
-        });
-    }
     if mode.as_deref() != Some("rule") {
         return Ok(ComposeResult {
             config,
@@ -41,7 +35,15 @@ pub(crate) fn compose_with(
         });
     }
 
-    let mut selected = eligible_profiles(profiles).collect::<Vec<_>>();
+    let mut selected = eligible_profiles(profiles)
+        .filter(|profile| {
+            enabled
+                || matches!(
+                    profile.common_binding.as_ref().map(|b| &b.action),
+                    Some(CommonRuleAction::Endpoint(_))
+                )
+        })
+        .collect::<Vec<_>>();
     selected.sort_by_key(|profile| {
         let binding = profile
             .common_binding
@@ -90,10 +92,17 @@ pub(crate) fn compose_with(
             }),
             CommonRuleAction::Direct => json!({ "type": "direct" }),
             CommonRuleAction::Reject => json!({ "type": "reject" }),
+            CommonRuleAction::Endpoint(tag) => {
+                super::endpoint_routes::validate_target(base, tag, &profile.semantic_ir)?;
+                json!({"type":"route", "outbound":tag})
+            }
         };
         let mut rule = json!({ "condition": { "type": "rule_set", "tag": tag }, "action": action });
         // Following the final route includes its data path. Omitting this on
         // older configs also keeps their schema unchanged (no synthetic auto).
+        if matches!(binding_action, CommonRuleAction::Endpoint(_)) {
+            rule["mode"] = json!("translate");
+        }
         if matches!(binding_action, CommonRuleAction::Final) {
             if let Some(mode) = base.pointer("/route/final_mode") {
                 rule["mode"] = mode.clone();

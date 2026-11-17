@@ -323,6 +323,31 @@ async fn imported_dns_change_rebuilds_active_capture_without_changing_tun_parame
 }
 
 #[tokio::test]
+async fn endpoint_dns_edits_accept_omitted_empty_route_lists_from_the_real_status_decoder() {
+    let backend = Fake::new(true, "");
+    let mut wire = params("10.77.0.1/24");
+    wire.as_object_mut().unwrap().remove("include_cidrs");
+    wire.as_object_mut().unwrap().remove("exclude_cidrs");
+    wire["running"] = json!(true);
+    wire["healthy"] = json!(true);
+    backend.0.lock().unwrap().snapshot.tun = runtime::parse_tun_status(&wire).unwrap();
+    let p = params("10.77.0.1/24");
+    apply(
+        &backend,
+        &json!({"test":"old","runtime":{"dns":{"default_server":"endpoint"}}}),
+        &json!({"test":"new","runtime":{"dns":{"default_server":"base"}}}),
+        &p,
+        &p,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        backend.0.lock().unwrap().calls,
+        vec!["stop", "apply:new", "start:10.77.0.1/24"]
+    );
+}
+
+#[tokio::test]
 async fn optional_capture_facts_are_only_required_when_mutating_capture() {
     for changed in [false, true] {
         let backend = Fake::new(true, "");

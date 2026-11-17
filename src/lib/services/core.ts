@@ -827,6 +827,7 @@ function stageToState(stage: string): ConnectionStatus['state'] {
 }
 
 export interface ProfileSettings {
+  endpointDnsServers?: {id: string; endpoint: string; server: import('$lib/types/dns').DnsServerConfig; isDefault: boolean}[];
   applied?: boolean;
   profileId: string;
   settings: AppConfig;

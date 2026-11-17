@@ -174,46 +174,18 @@ pub fn apply(config: &mut Value, app: &AppConfig) -> AppResult<()> {
     Ok(())
 }
 
-// Keep domain exceptions on native DNS while retaining Fake-IP ownership or
-// real-IP reverse mappings used to recover the hostname for TUN routing.
+// A connection bypass is not a DNS-server selection. Keep the explicitly
+// configured resolver/dispatch (including private DNS) and retain hostname
+// recovery for real-IP routing without introducing an OS-resolver loop.
 fn apply_dns(dns: Option<&mut Value>, entries: &[String]) -> AppResult<()> {
-    let Some(dns) = dns.and_then(Value::as_object_mut) else {
-        return Ok(());
-    };
-    let patterns: Vec<_> = entries
+    if entries
         .iter()
-        .filter(|rule| network(rule).ok().flatten().is_none())
-        .map(|rule| domain_pattern(rule))
-        .collect::<AppResult<_>>()?;
-    if patterns.is_empty() {
-        return Ok(());
-    }
-    let servers = dns
-        .get_mut("servers")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| AppError::invalid_argument("DNS servers must be an object"))?;
-    let server = if let Some((name, _)) = servers
-        .iter()
-        .find(|(_, v)| v.get("type").and_then(Value::as_str) == Some("system"))
+        .any(|rule| network(rule).ok().flatten().is_none())
     {
-        name.clone()
-    } else {
-        let mut name = "znet-bypass-system".to_string();
-        while servers.contains_key(&name) {
-            name.push('-');
+        if let Some(dns) = dns.and_then(Value::as_object_mut) {
+            dns.entry("reverse_mapping").or_insert_with(|| json!({}));
         }
-        servers.insert(name.clone(), json!({"type":"system"}));
-        name
-    };
-    let dispatch = dns
-        .entry("dispatch")
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
-        .ok_or_else(|| AppError::invalid_argument("DNS dispatch must be an array"))?;
-    let rule = json!({"condition":{"type":"domain_regex","values":patterns},"server":server});
-    dispatch.retain(|v| v != &rule);
-    dispatch.insert(0, rule);
-    dns.entry("reverse_mapping").or_insert_with(|| json!({}));
+    }
     Ok(())
 }
 

@@ -1,6 +1,8 @@
 <script lang="ts">
   import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
   let profileSnapshot = $state<ProfileSettings | null>(null);
+  const endpointDnsServers = $derived(profileSnapshot?.endpointDnsServers ?? []);
+  const endpointDefaultServer = $derived(endpointDnsServers.find(server=>server.isDefault));
   const importedDns = $derived(profileSnapshot?.settings.userEndpoints?.find(row => row.enabled !== false && row.directions?.outbound !== false && row.dns?.use_as_default));
   async function loadGlobalDnsSettings() {
     profileSnapshot = await getProfileSettings();
@@ -9,7 +11,7 @@
   }
   async function applyGlobalDnsSettings(source: DnsSettingsInput, draft: DnsSettingsDraft) {
     if (!profileSnapshot) throw new Error('请先读取当前配置');
-    const issues = validateDnsDraft(draft).filter(issue => issue.severity === 'error');
+    const issues = validateDnsDraft(withEndpointServers(draft)).filter(issue => issue.severity === 'error');
     if (issues.length) throw new Error(issues.map(issue => issue.message).join('；'));
     const next = projectDnsSettings(source, draft);
     profileSnapshot = await saveProfileSettings(profileSnapshot, {dns: next});
@@ -109,7 +111,7 @@
 
   const ruleSetTags = $derived(new Set(ruleSetOptions.map((option) => option.tag)));
   const routeTargetTags = $derived(new Set(routeTargetOptions.map((option) => option.tag)));
-  const issues = $derived(draft ? validateDnsDraft(draft, {
+  const issues = $derived(draft ? validateDnsDraft(withEndpointServers(draft), {
     ruleSetTags: ruleSetReferencesKnown ? ruleSetTags : undefined,
     routeTargetTags: routeTargetsKnown ? routeTargetTags : undefined,
     features: compatibility.features,
@@ -132,9 +134,15 @@
   const usesSystemDns = $derived(draft
     ? Object.values(draft.dns.servers).some((server) => server.type === 'system')
     : false);
-  const serverNames = $derived(draft ? Object.keys(draft.dns.servers) : []);
+  const baseServerNames = $derived(draft ? Object.keys(draft.dns.servers) : []);
+  const allServers = $derived({...draft?.dns.servers, ...Object.fromEntries(endpointDnsServers.map(entry=>[entry.id,entry.server]))});
+  const serverNames = $derived(Object.keys(allServers));
+  function withEndpointServers(value: DnsSettingsDraft): DnsSettingsDraft {
+    return {...value,dns:{...value.dns,servers:{...value.dns.servers,...Object.fromEntries(endpointDnsServers.map(entry=>[entry.id,entry.server]))}}};
+  }
+  function serverLabel(name:string){const imported=endpointDnsServers.find(entry=>entry.id===name);return imported?`${imported.endpoint} · ${imported.server.host}`:name;}
   const directNodeServerNames = $derived(draft
-    ? serverNames.filter((name) => !draft?.dns.servers[name]?.detour)
+    ? serverNames.filter((name) => !allServers[name]?.detour)
     : []);
   const hasDnsDetour = $derived(draft
     ? Object.values(draft.dns.servers).some((server) => Boolean(server.detour?.trim()))
@@ -784,7 +792,7 @@
       if (!condition || typeof condition !== 'object' || Array.isArray(condition)) {
         throw new Error('分流条件必须是有效的 JSON 对象');
       }
-      if (!dispatchServerDraft || !Object.hasOwn(draft.dns.servers, dispatchServerDraft)) {
+      if (!dispatchServerDraft || !Object.hasOwn(allServers, dispatchServerDraft)) {
         dispatchDialogError = '请选择有效的 DNS 服务器';
         return;
       }
@@ -863,7 +871,7 @@
   <Button variant="outline" size="sm" onclick={restoreDnsSource} disabled={saving || !isLocallyEdited(profileSnapshot, 'dns')}>恢复配置值</Button>
 </div>
 
-{#if importedDns}<p role="status" class="state compact">当前默认 DNS 来自端点「{importedDns.tag}」（{importedDns.dns?.servers.join(', ')}）。下方为基础 DNS 配置；停用端点后自动恢复。可在端点编辑中切换默认 DNS 来源。</p>{/if}
+{#if importedDns}<div role="status" class="endpoint-dns-source"><span>默认 DNS 来源</span><strong>{importedDns.tag}</strong><span class="address">{importedDns.dns?.servers.join(', ')}</span><Button variant="link" size="sm" onclick={()=>store.openTab('endpoints')}>在端点中管理</Button></div>{/if}
 <div class="panel-head">
   <div>
     <h2>域名解析</h2>
@@ -936,7 +944,7 @@
     <div class="issues warning" role="status">
       <div>规则集引用暂未确认：{ruleSetReferenceError}</div>
       <div class="inline-actions">
-        <Button variant="outline" size="sm" onclick={() => store.openTab('rules')}>管理规则集</Button>
+        <Button variant="outline" size="sm" onclick={() => store.openRuleSets()}>管理规则集</Button>
         <Button variant="ghost" size="sm" onclick={refreshRuleSetReferences}>重试读取</Button>
       </div>
     </div>
@@ -945,7 +953,7 @@
     <div class="issues error" role="alert">
       <div>以下 DNS 分流引用已失效：{danglingRuleTags.join('、')}。请选择现有规则集或删除对应分流。</div>
       <div class="inline-actions">
-        <Button variant="outline" size="sm" onclick={() => store.openTab('rules')}>管理规则集</Button>
+        <Button variant="outline" size="sm" onclick={() => store.openRuleSets()}>管理规则集</Button>
         <Button variant="ghost" size="sm" onclick={refreshRuleSetReferences}>刷新引用</Button>
       </div>
     </div>
@@ -1019,8 +1027,8 @@
           <div class="fallback-row">
             <span class="fallback-order">#{index + 1}</span>
             <Select.Root type="single" value={server} onValueChange={(value) => { if (value) changePolicyFallback('fallback_servers', index, value); }}>
-              <Select.Trigger aria-label={`通用回退服务器 ${index + 1}`}>{server}</Select.Trigger>
-              <Select.Content>{#each serverNames as name}<Select.Item value={name} label={name}>{name}</Select.Item>{/each}</Select.Content>
+              <Select.Trigger aria-label={`通用回退服务器 ${index + 1}`}>{serverLabel(server)}</Select.Trigger>
+              <Select.Content>{#each serverNames as name}<Select.Item value={name} label={serverLabel(name)}>{serverLabel(name)}</Select.Item>{/each}</Select.Content>
             </Select.Root>
             <Button variant="ghost" size="icon-xs" onclick={() => movePolicyFallback('fallback_servers', index, -1)} disabled={index === 0}><ChevronUp /></Button>
             <Button variant="ghost" size="icon-xs" onclick={() => movePolicyFallback('fallback_servers', index, 1)} disabled={index === (draft.dns.policy?.fallback_servers?.length ?? 0) - 1}><ChevronDown /></Button>
@@ -1040,10 +1048,10 @@
         <label class="policy-primary">
           <span>主服务器</span>
           <Select.Root type="single" value={draft.dns.policy?.node_server ?? unsetSelection} onValueChange={(value) => { if (value) changePolicyServer('node_server', value); }}>
-            <Select.Trigger aria-label="节点解析服务器">{draft.dns.policy?.node_server ?? '沿用默认分流'}</Select.Trigger>
+            <Select.Trigger aria-label="节点解析服务器">{draft.dns.policy?.node_server ? serverLabel(draft.dns.policy.node_server) : '沿用默认分流'}</Select.Trigger>
             <Select.Content>
               <Select.Item value={unsetSelection} label="沿用默认分流">沿用默认分流</Select.Item>
-              {#each directNodeServerNames as name}<Select.Item value={name} label={name}>{name}</Select.Item>{/each}
+              {#each directNodeServerNames as name}<Select.Item value={name} label={serverLabel(name)}>{serverLabel(name)}</Select.Item>{/each}
             </Select.Content>
           </Select.Root>
         </label>
@@ -1052,8 +1060,8 @@
             <div class="fallback-row">
               <span class="fallback-order">#{index + 1}</span>
               <Select.Root type="single" value={server} onValueChange={(value) => { if (value) changePolicyFallback('node_fallback_servers', index, value); }}>
-                <Select.Trigger aria-label={`节点回退服务器 ${index + 1}`}>{server}</Select.Trigger>
-                <Select.Content>{#each directNodeServerNames as name}<Select.Item value={name} label={name}>{name}</Select.Item>{/each}</Select.Content>
+                <Select.Trigger aria-label={`节点回退服务器 ${index + 1}`}>{serverLabel(server)}</Select.Trigger>
+                <Select.Content>{#each directNodeServerNames as name}<Select.Item value={name} label={serverLabel(name)}>{serverLabel(name)}</Select.Item>{/each}</Select.Content>
               </Select.Root>
               <Button variant="ghost" size="icon-xs" onclick={() => movePolicyFallback('node_fallback_servers', index, -1)} disabled={index === 0}><ChevronUp /></Button>
               <Button variant="ghost" size="icon-xs" onclick={() => movePolicyFallback('node_fallback_servers', index, 1)} disabled={index === (draft.dns.policy?.node_fallback_servers?.length ?? 0) - 1}><ChevronDown /></Button>
@@ -1071,10 +1079,10 @@
         <label class="policy-primary">
           <span>主服务器</span>
           <Select.Root type="single" value={draft.dns.policy?.direct_server ?? unsetSelection} onValueChange={(value) => { if (value) changePolicyServer('direct_server', value); }}>
-            <Select.Trigger aria-label="直连解析服务器">{draft.dns.policy?.direct_server ?? '沿用默认分流'}</Select.Trigger>
+            <Select.Trigger aria-label="直连解析服务器">{draft.dns.policy?.direct_server ? serverLabel(draft.dns.policy.direct_server) : '沿用默认分流'}</Select.Trigger>
             <Select.Content>
               <Select.Item value={unsetSelection} label="沿用默认分流">沿用默认分流</Select.Item>
-              {#each serverNames as name}<Select.Item value={name} label={name}>{name}</Select.Item>{/each}
+              {#each serverNames as name}<Select.Item value={name} label={serverLabel(name)}>{serverLabel(name)}</Select.Item>{/each}
             </Select.Content>
           </Select.Root>
         </label>
@@ -1083,8 +1091,8 @@
             <div class="fallback-row">
               <span class="fallback-order">#{index + 1}</span>
               <Select.Root type="single" value={server} onValueChange={(value) => { if (value) changePolicyFallback('direct_fallback_servers', index, value); }}>
-                <Select.Trigger aria-label={`直连回退服务器 ${index + 1}`}>{server}</Select.Trigger>
-                <Select.Content>{#each serverNames as name}<Select.Item value={name} label={name}>{name}</Select.Item>{/each}</Select.Content>
+                <Select.Trigger aria-label={`直连回退服务器 ${index + 1}`}>{serverLabel(server)}</Select.Trigger>
+                <Select.Content>{#each serverNames as name}<Select.Item value={name} label={serverLabel(name)}>{serverLabel(name)}</Select.Item>{/each}</Select.Content>
               </Select.Root>
               <Button variant="ghost" size="icon-xs" onclick={() => movePolicyFallback('direct_fallback_servers', index, -1)} disabled={index === 0}><ChevronUp /></Button>
               <Button variant="ghost" size="icon-xs" onclick={() => movePolicyFallback('direct_fallback_servers', index, 1)} disabled={index === (draft.dns.policy?.direct_fallback_servers?.length ?? 0) - 1}><ChevronDown /></Button>
@@ -1112,7 +1120,7 @@
         <Button variant="outline" size="sm" onclick={openAddServer}><Plus />新增</Button>
       </div>
       <div class="server-list">
-        {#each serverNames as name (name)}
+        {#each baseServerNames as name (name)}
           {@const server = draft.dns.servers[name]}
           <article class="server-row">
             <div class="server-icon"><Server /></div>
@@ -1120,7 +1128,7 @@
               <div class="server-name">
                 <strong>{name}</strong>
                 <span class="server-type">{serverTypeOptions.find((option) => option.value === server.type)?.label ?? server.type}</span>
-                {#if draft.dns.default_server === name}<span class="default-badge">默认</span>{/if}
+                {#if draft.dns.default_server === name}<span class="default-badge">{endpointDefaultServer?'基础默认':'默认'}</span>{/if}
               </div>
               <span>{describeServer(server)}</span>
             </div>
@@ -1130,9 +1138,20 @@
             </div>
           </article>
         {/each}
+        {#each endpointDnsServers as entry (entry.id)}
+          <article class="server-row" aria-label={`端点 DNS ${entry.endpoint} ${entry.server.host}`}>
+            <div class="server-icon"><Server /></div>
+            <div class="server-summary">
+              <div class="server-name"><strong>{entry.endpoint}</strong><span class="server-type">来自端点</span>{#if entry.isDefault}<span class="default-badge">默认</span>{/if}</div>
+              <span>{describeServer(entry.server)}</span>
+            </div>
+            <div class="server-actions"><Button variant="ghost" size="sm" onclick={()=>store.openTab('endpoints')}>管理端点</Button></div>
+          </article>
+        {/each}
       </div>
+      {#if endpointDefaultServer}<div class="default-row"><span>当前默认服务器</span><strong>{serverLabel(endpointDefaultServer.id)}</strong></div>{/if}
       <div class="default-row">
-        <span>默认服务器</span>
+        <span>{endpointDefaultServer?'基础默认服务器':'默认服务器'}</span>
         <Select.Root
           type="single"
           value={draft.dns.default_server}
@@ -1140,8 +1159,8 @@
         >
           <Select.Trigger aria-label="默认 DNS 服务器">{draft.dns.default_server}</Select.Trigger>
           <Select.Content>
-            {#each serverNames as name}
-              <Select.Item value={name} label={name}>{name}</Select.Item>
+            {#each baseServerNames as name}
+              <Select.Item value={name} label={serverLabel(name)}>{serverLabel(name)}</Select.Item>
             {/each}
           </Select.Content>
         </Select.Root>
@@ -1193,7 +1212,7 @@
               <div class="dispatch-order"><span>#{index + 1}</span><Button variant="ghost" size="icon-xs" onclick={() => moveDispatch(index, -1)} disabled={index === 0}><ChevronUp /></Button><Button variant="ghost" size="icon-xs" onclick={() => moveDispatch(index, 1)} disabled={index === draft.dns.dispatch.length - 1}><ChevronDown /></Button></div>
               <div class="dispatch-summary">
                 <strong>{dispatchConditionSummary(rule.condition)}</strong>
-                <span>使用 {rule.server}</span>
+                <span>使用 {serverLabel(rule.server)}</span>
               </div>
               <div class="dispatch-actions">
                 <Button variant="ghost" size="icon-sm" onclick={() => openEditDispatch(index)} aria-label={`编辑第 ${index + 1} 条分流规则`}><Pencil /></Button>
@@ -1216,7 +1235,6 @@
       <ErrorRecoveryActions code={errorCode} context="dns" onretry={save} />
     </div>
   {/if}
-  <p class="state compact">DNS 设置对所有配置生效，订阅原文不变。恢复配置值后采用当前配置的 DNS。</p>
   <div class="actions"><Button onclick={save} disabled={saving || errors.length > 0}><Save />{saving ? '保存并应用中…' : saved ? savedPending ? '已保存，待内核' : '已保存' : '保存并应用'}</Button></div>
 {/if}
 
@@ -1402,14 +1420,14 @@
                     </Select.Content>
                   </Select.Root>
                   <small>可选活动配置和客户端管理的已就绪规则集；DNS 引用不依赖公共路由规则开关。</small>
-                  <Button type="button" variant="outline" size="sm" onclick={() => store.openTab('rules')}>管理规则集</Button>
+                  <Button type="button" variant="outline" size="sm" onclick={() => store.openRuleSets()}>管理规则集</Button>
                   {#if ruleSetReferencesKnown && dispatchConditionTagDraft && !ruleSetTags.has(dispatchConditionTagDraft)}
                     <div class="reference-warning">当前引用 {dispatchConditionTagDraft} 已失效，请重新选择。</div>
                   {/if}
                 {:else}
                   <div class="empty-reference">
                     <span>{ruleSetReferencesKnown ? '暂无可用规则集，请在规则页添加或更新规则资源。' : '规则集列表暂未读取成功，现有引用尚未确认。'}</span>
-                    <Button type="button" variant="outline" size="sm" onclick={() => store.openTab('rules')}>前往规则页</Button>
+                    <Button type="button" variant="outline" size="sm" onclick={() => store.openRuleSets()}>前往规则页</Button>
                   </div>
                 {/if}
               </label>
@@ -1438,10 +1456,10 @@
             value={dispatchServerDraft}
             onValueChange={(value) => { if (value) dispatchServerDraft = value; }}
           >
-            <Select.Trigger aria-label="分流 DNS 服务器">{dispatchServerDraft || '选择服务器'}</Select.Trigger>
+            <Select.Trigger aria-label="分流 DNS 服务器">{dispatchServerDraft ? serverLabel(dispatchServerDraft) : '选择服务器'}</Select.Trigger>
             <Select.Content>
               {#each serverNames as name}
-                <Select.Item value={name} label={name}>{name}</Select.Item>
+                <Select.Item value={name} label={serverLabel(name)}>{serverLabel(name)}</Select.Item>
               {/each}
             </Select.Content>
           </Select.Root>
@@ -1621,7 +1639,10 @@
   .config-preview-grid section { min-width: 0; }
   .config-preview-grid strong { display: block; margin-bottom: 5px; font-size: 11px; }
   .config-preview-grid pre { max-height: 360px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--muted) 30%, transparent); font-size: 9.5px; line-height: 1.45; white-space: pre; }
-  .state.compact { min-height: 0; padding: 10px; }
+  .endpoint-dns-source {display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px;font-size:12px;color:var(--muted-foreground);}
+  .endpoint-dns-source strong {font-weight:500;color:var(--foreground);}
+  .endpoint-dns-source .address {font-variant-numeric:tabular-nums;}
+  .endpoint-dns-source :global(button) {margin-inline-start:auto;}
 
   .section {
     padding: 14px 0;

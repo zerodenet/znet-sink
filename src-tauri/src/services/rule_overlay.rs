@@ -60,6 +60,7 @@ pub(crate) fn compose_candidate_with_app(
         app.routing.inject_common_rules,
         &profiles,
         app.overrides.rules,
+        id,
     )?;
     let selections = match id {
         Some(id) => policy_selection::selections_for_profile(state, id)?,
@@ -73,6 +74,12 @@ pub(crate) fn compose_candidate_with_app(
     };
     let mut candidate = crate::configuration::composition::finalize(base, config, &inputs)?;
     materialize_dns_rule_sets(&mut candidate, &profiles)?;
+    crate::configuration::endpoint_routes::validate_capture(
+        &candidate.config,
+        base,
+        &inputs.app,
+        &profiles,
+    )?;
     if !inputs.app.user_endpoints.is_empty() {
         candidate
             .report
@@ -126,7 +133,13 @@ pub(crate) fn validate_app_config_candidate(
     let (scoped, edited) =
         crate::configuration::local_edits::resolve(app_config, id.as_deref(), &base)?;
     let enabled = scoped.routing.inject_common_rules;
-    let config = compose_rules_for(&edited, enabled, &profiles, scoped.overrides.rules)?;
+    let config = compose_rules_for(
+        &edited,
+        enabled,
+        &profiles,
+        scoped.overrides.rules,
+        id.as_deref(),
+    )?;
     finalize_effective_config(
         state,
         &base,
@@ -153,7 +166,14 @@ fn compose_effective_with(
     } else {
         enabled
     };
-    let config = compose_rules_for(base, enabled, profiles, scoped.overrides.rules)?;
+    let (profile_id, _) = policy_selection::saved_selections(state, base)?;
+    let config = compose_rules_for(
+        base,
+        enabled,
+        profiles,
+        scoped.overrides.rules,
+        profile_id.as_deref(),
+    )?;
     finalize_effective_config(
         state,
         base,
@@ -202,6 +222,12 @@ fn finalize_effective_config(
     };
     let mut candidate = crate::configuration::composition::finalize(base, config, &inputs)?;
     materialize_dns_rule_sets(&mut candidate, profiles)?;
+    crate::configuration::endpoint_routes::validate_capture(
+        &candidate.config,
+        base,
+        &inputs.app,
+        profiles,
+    )?;
     state.configuration().record(candidate.report.clone());
     Ok(candidate.config)
 }
@@ -380,8 +406,8 @@ pub async fn set_binding(
     input: CommonRuleBindingInput,
 ) -> AppResult<RuleSetProfile> {
     let state = app_handle.state::<AppState>();
-    let _operation = state.proxy_config_operation().lock().await;
     let id = common::normalize_required(input.rule_set_id, "ruleSetId")?;
+    let _in_flight = common::begin_in_flight(state.rule_set_updates(), "rule_set", &id)?;
     let previous = common::lock(state.rule_sets(), "rule_set")?.clone();
     let mut next = previous.clone();
     let profile = next
@@ -401,33 +427,62 @@ pub async fn set_binding(
         ));
     }
     profile.common_binding = Some(crate::models::rule_set::CommonRuleBinding {
+        profile_id: input.profile_id,
         enabled: input.enabled,
         action: input.action,
         order: input.order,
     });
     let updated = profile.clone();
 
-    let base = active_content(state.inner())?;
-    let inject_enabled = common::lock(state.app_config(), "app_config")?
+    publish_profiles(state.inner(), &previous, next).await?;
+    Ok(updated)
+}
+
+/// Publish a rule asset and its binding in one operation. Native apply failures
+/// leave both the saved catalog and the running configuration unchanged.
+pub(crate) async fn publish_profiles(
+    state: &AppState,
+    previous: &[RuleSetProfile],
+    next: Vec<RuleSetProfile>,
+) -> AppResult<()> {
+    let _operation = state.proxy_config_operation().lock().await;
+    if serde_json::to_value(&*common::lock(state.rule_sets(), "rule_set")?).ok()
+        != serde_json::to_value(previous).ok()
+    {
+        return Err(AppError::invalid_argument(
+            "规则已被其他操作修改，请刷新后重试",
+        ));
+    }
+    let base = active_content(state)?;
+    let enabled = common::lock(state.app_config(), "app_config")?
         .routing
         .inject_common_rules;
-    let old_effective = base
+    let old = base
         .as_ref()
-        .map(|base| {
-            compose_effective_with(state.inner(), base, inject_enabled, &previous, None, None)
-        })
-        .transpose()?;
-    let next_effective = base
+        .map(|b| compose_effective_with(state, b, enabled, previous, None, None))
+        .transpose();
+    let candidate = base
         .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &next, None, None))
+        .map(|b| compose_effective_with(state, b, enabled, &next, None, None))
         .transpose()?;
-    apply_if_running(state.inner(), next_effective).await?;
+    apply_if_running(state, candidate).await?;
     if let Err(error) = domain_store::save_rule_sets(&next) {
-        let _ = apply_if_running(state.inner(), old_effective.clone()).await;
+        let old = old.map_err(|old_error| {
+            AppError::internal(format!(
+                "规则保存失败：{}；旧配置无法重新合成：{}，请检查运行中配置",
+                error.message, old_error.message
+            ))
+        })?;
+        if let Err(rollback) = apply_if_running(state, old).await {
+            return Err(AppError::internal(format!(
+                "规则保存失败：{}；恢复旧运行配置失败：{}",
+                error.message, rollback.message
+            )));
+        }
         return Err(error);
     }
     *common::lock(state.rule_sets(), "rule_set")? = next;
-    Ok(updated)
+    Ok(())
 }
 
 /// Recompose after a rule asset generation changes. The base profile remains
@@ -463,7 +518,19 @@ fn compose_rules_for(
     enabled: bool,
     profiles: &[RuleSetProfile],
     force: bool,
+    profile_id: Option<&str>,
 ) -> AppResult<Value> {
+    let scoped: Vec<_> = profiles
+        .iter()
+        .filter(|p| {
+            p.common_binding
+                .as_ref()
+                .and_then(|b| b.profile_id.as_deref())
+                .is_none_or(|id| Some(id) == profile_id)
+        })
+        .cloned()
+        .collect();
+    let profiles = scoped.as_slice();
     if !force && base.pointer("/route/rules").is_some() {
         // Enabling a user binding is an explicit local policy choice, even
         // when source rules are inherited. Do not activate built-in defaults.
@@ -565,6 +632,7 @@ mod tests {
             provenance: None,
             managed_by_subscription_id: None,
             common_binding: Some(CommonRuleBinding {
+                profile_id: None,
                 enabled: true,
                 action,
                 order,
@@ -805,7 +873,7 @@ mod tests {
             serde_json::to_string(&json!({
                 "version": 1,
                 "name": id,
-                "rules": rules
+                "rules": rules.clone()
             }))
             .unwrap()
             .as_bytes(),
@@ -821,6 +889,7 @@ mod tests {
         ));
         fs::write(&path, &bytes).unwrap();
         let mut profile = profile(id, order, action);
+        profile.semantic_ir = json!({"version":1,"name":id,"rules":rules});
         profile.artifact = Some(ZrsArtifact {
             path: path.to_string_lossy().into_owned(),
             major_version: metadata.major_version,

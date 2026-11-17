@@ -152,3 +152,79 @@ fn custom_bindings_do_not_change_global_or_direct_mode_policy() {
     }
     fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn endpoint_domain_and_database_bindings_survive_recompose_without_public_injection() {
+    let (domain, path) = tests::verified_profile_with_rules(
+        "company-domain",
+        0,
+        CommonRuleAction::Endpoint("Starters".into()),
+        json!([{"type":"domain_suffix","value":"starmerx.com"}]),
+    );
+    let (database, dbpath) = tests::verified_profile_with_rules(
+        "company-db",
+        1,
+        CommonRuleAction::Endpoint("Starters".into()),
+        json!([{"type":"ipv4_cidr","value":"192.168.1.235/32"}]),
+    );
+    let db = zero_rule::zrs::MappedRuleSet::open(&dbpath, VerifyMode::FullChecksum).unwrap();
+    assert!(db.matches(
+        &zero_rule::PreparedRuleQuery::new(None, Some("192.168.1.235".parse().unwrap())).unwrap()
+    ));
+    assert!(!db.matches(
+        &zero_rule::PreparedRuleQuery::new(None, Some("192.168.1.234".parse().unwrap())).unwrap()
+    ));
+    drop(db);
+    let mapped = zero_rule::zrs::MappedRuleSet::open(&path, VerifyMode::FullChecksum).unwrap();
+    for name in ["starmerx.com", "vending.test.starmerx.com"] {
+        assert!(mapped.matches(&zero_rule::PreparedRuleQuery::new(Some(name), None).unwrap()));
+    }
+    assert!(
+        !mapped.matches(&zero_rule::PreparedRuleQuery::new(Some("notstarmerx.com"), None).unwrap())
+    );
+    drop(mapped);
+    let mut base = source();
+    base["endpoints"] = json!([{"tag":"Starters","enabled":true,"directions":{"outbound":true},"protocol":{"type":"wireguard","peers":[{"allowed_ips":["192.168.0.0/23"]}]}}]);
+    let state = state(
+        base.clone(),
+        vec![domain.clone(), database.clone()],
+        Some(false),
+    );
+    let candidate = current_effective_config(&state).unwrap().unwrap();
+    assert_eq!(
+        candidate["route"]["rules"][0]["action"],
+        json!({"type":"route","outbound":"Starters"})
+    );
+    assert_eq!(
+        candidate["route"]["rules"][1]["condition"]["tag"],
+        common_tag(&database.id)
+    );
+    assert_eq!(candidate["route"]["rules"][2], base["route"]["rules"][0]);
+    assert_eq!(candidate["route"]["rules"][0]["mode"], "translate");
+    assert_eq!(
+        current_effective_config(&state).unwrap().unwrap(),
+        candidate
+    );
+    assert_eq!(active_content(&state).unwrap().unwrap(), base);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(dbpath).unwrap();
+}
+
+#[test]
+fn profile_scoped_endpoint_binding_does_not_break_other_configurations() {
+    let (mut profile, path) = tests::verified_profile_with_rules(
+        "scoped-endpoint",
+        0,
+        CommonRuleAction::Endpoint("OnlyInOtherProfile".into()),
+        json!([{"type":"domain_suffix","value":"starmerx.com"}]),
+    );
+    profile.common_binding.as_mut().unwrap().profile_id = Some("another-profile".into());
+    let base = source();
+    let state = state(base.clone(), vec![profile.clone()], Some(false));
+    let candidate = current_effective_config(&state).unwrap().unwrap();
+    assert_eq!(candidate["route"]["rules"], base["route"]["rules"]);
+    assert!(!candidate.to_string().contains("OnlyInOtherProfile"));
+    // Returning to the bound configuration still validates the real endpoint.
+    assert!(compose_rules_for(&base, false, &[profile], false, Some("another-profile")).is_err());
+    std::fs::remove_file(path).unwrap();
+}

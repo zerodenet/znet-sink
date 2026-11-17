@@ -1,4 +1,6 @@
 <script lang="ts">
+  import EndpointRouteEditor from './EndpointRouteEditor.svelte';
+  let routeEditor = $state<EndpointRouteEditor>();
   import { Network, Pencil, Trash2, MoreHorizontal, LoaderCircle, RotateCw, Info, ArrowDownToLine, ArrowUpFromLine, Cable, Boxes, Route, Pin, MapPin } from '@lucide/svelte';
   import EndpointWarning from './EndpointWarning.svelte';
   import EndpointObservationView from './EndpointObservationView.svelte';
@@ -68,6 +70,7 @@
       <details class="options" bind:this={menuElement} bind:open={menuOpen}>
         <summary aria-label={`${endpoint.tag} 更多操作`} title="更多操作"><MoreHorizontal size={18} /></summary>
         <div class="option-menu">
+          {#if endpoint.supported.directions.outbound}<Button variant="ghost" size="sm" disabled={managementDisabled} onclick={()=>{menuOpen=false;menuElement?.querySelector('summary')?.focus();void routeEditor?.manage();}}><Route size={14}/>路由规则</Button>{/if}
           {#if userOwned}
             <Button variant="ghost" size="sm" disabled={managementDisabled} onclick={() => { menuOpen = false; onEdit?.(); }}><Pencil size={14} />编辑端点</Button>
             <Button variant="ghost" size="sm" disabled={managementDisabled} onclick={() => { menuOpen = false; onDelete?.(); }}><Trash2 size={14} />删除端点</Button>
@@ -101,6 +104,7 @@
     </div>
   </footer>
 </article>
+<EndpointRouteEditor bind:this={routeEditor} showTrigger={false} endpoint={endpoint.tag} disabled={managementDisabled}/>
 
 <Dialog.Root bind:open={detailOpen}>
   <Dialog.Content class="sm:max-w-[640px]">

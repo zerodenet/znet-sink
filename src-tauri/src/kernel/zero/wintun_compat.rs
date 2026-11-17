@@ -12,8 +12,6 @@ use std::collections::BTreeSet;
 #[cfg(windows)]
 use std::fs;
 #[cfg(windows)]
-use std::io::Read;
-#[cfg(windows)]
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::time::Duration;
@@ -21,7 +19,9 @@ use std::time::Duration;
 #[cfg(windows)]
 use sha2::{Digest, Sha256};
 
-use crate::errors::{AppError, AppResult};
+#[cfg(windows)]
+use crate::errors::AppError;
+use crate::errors::AppResult;
 
 #[cfg(windows)]
 use crate::services::{app_config_store, common, core_config};
@@ -39,8 +39,6 @@ const WINTUN_DLL: &str = "wintun.dll";
 const WINTUN_LICENSE: &str = "wintun-LICENSE.txt";
 #[cfg(windows)]
 const RUNTIME_MANIFEST_FILE: &str = ".znet-sink-zero-runtime.json";
-#[cfg(windows)]
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(windows)]
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -185,30 +183,34 @@ fn repair_managed_runtime(executable: &Path, install_dir: &Path) -> AppResult<()
 
 #[cfg(windows)]
 fn download_pinned_archive() -> AppResult<Vec<u8>> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("znet-sink")
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(DOWNLOAD_TIMEOUT)
-        .build()
-        .map_err(|error| {
-            AppError::internal(format!("failed to create Wintun download client: {error}"))
-        })?;
-
-    let mut response = client
-        .get(WINTUN_ARCHIVE_URL)
-        .send()
-        .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|error| {
-            AppError::internal(format!(
-                "failed to download pinned Wintun {} runtime: {error}",
-                WINTUN_VERSION
-            ))
-        })?;
-    let mut bytes = Vec::new();
-    response.read_to_end(&mut bytes).map_err(|error| {
-        AppError::internal(format!("failed to read Wintun download response: {error}"))
+    let manager = znet_client_core::capability::Manager::default();
+    let lease = znet_client_capabilities::host::network(
+        &manager,
+        "builtin.wintun-download",
+        "network.get",
+        1,
+        8 * 1024 * 1024,
+        DOWNLOAD_TIMEOUT,
+    )
+    .map_err(|error| {
+        AppError::internal(format!("Wintun download authorization failed: {error}"))
     })?;
-    Ok(bytes)
+    let response = znet_client_capabilities::network::get(
+        &lease,
+        WINTUN_ARCHIVE_URL,
+        "znet-sink",
+        8 * 1024 * 1024,
+        &[],
+    )
+    .and_then(|response| response.take(&lease))
+    .map_err(|error| AppError::internal(format!("Wintun download failed: {error}")))?;
+    if !(200..300).contains(&response.status) {
+        return Err(AppError::internal(format!(
+            "Wintun download returned HTTP {}",
+            response.status
+        )));
+    }
+    Ok(response.body)
 }
 
 #[cfg(windows)]

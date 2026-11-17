@@ -59,7 +59,10 @@ pub struct Response {
 
 #[derive(Clone, Debug, Default)]
 pub enum Route {
+    /// Resolve the host-selected route before sending.
     #[default]
+    Default,
+    /// Explicit system/environment proxy selection.
     System,
     Direct,
     Proxy(String),
@@ -113,15 +116,18 @@ pub fn stream_get(
     let permission = Permission::new("network.download", url.origin().ascii_serialization());
     lease.execute(&permission, || {
         let mut request_headers = checked_headers(&input.headers)?;
-        let mut builder = Client::builder()
+        let mut builder = add_acceptance_root(Client::builder())?
             .redirect(Policy::none())
             .user_agent(&input.user_agent)
             .connect_timeout(input.connect_timeout);
-        if input.no_proxy {
-            builder = builder.no_proxy();
+        let route = if input.no_proxy {
+            Route::Direct
         } else if let Some(proxy) = &input.proxy {
-            builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| Error::InvalidRequest)?);
-        }
+            Route::Proxy(proxy.clone())
+        } else {
+            Route::Default
+        };
+        builder = routing::apply(builder, &route)?;
         let client = builder.build().map_err(|_| Error::InvalidRequest)?;
         for hop in 0..=input.max_redirects {
             lease.check(Some(&Permission::new(
@@ -365,7 +371,7 @@ pub fn get_conditional(
             max_bytes,
             response_headers,
             follow: true,
-            route: Route::System,
+            route: Route::Default,
         },
     )
 }
@@ -393,7 +399,7 @@ pub fn request(
             max_bytes,
             response_headers: &["content-type", "location"],
             follow: false,
-            route: Route::System,
+            route: Route::Default,
         },
     )
 }
@@ -442,6 +448,8 @@ struct Options<'a> {
     follow: bool,
     route: Route,
 }
+mod routing;
+pub use routing::{default_route, install_default_route_provider};
 mod diagnostics;
 pub use diagnostics::{get_with_diagnostics, RequestFailure, TransportFailure};
 
@@ -535,13 +543,7 @@ fn exchange_diagnosed(
         let mut builder = add_acceptance_root(Client::builder())?
             .redirect(Policy::none())
             .user_agent(user_agent);
-        builder = match &route {
-            Route::System => builder,
-            Route::Direct => builder.no_proxy(),
-            Route::Proxy(proxy) => {
-                builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| Error::InvalidRequest)?)
-            }
-        };
+        builder = routing::apply(builder, &route)?;
         let client = builder.build().map_err(|_| Error::InvalidRequest)?;
         for hop in 0..=10 {
             let mut request_timeout = lease.remaining()?;

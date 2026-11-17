@@ -10,11 +10,20 @@
     finally {commonSaving = false;}
   }
 
+  import EndpointRouteList from './EndpointRouteList.svelte';
+  let {initialSection}: {initialSection?:'routes'|'sets'}=$props();
+  let section=$state<'routes'|'sets'>(untrack(()=>initialSection??store.rulesSection));
+  import EndpointRouteEditor from './EndpointRouteEditor.svelte';
+  let routeEditor = $state<EndpointRouteEditor>();
+  let routeBusy = $state(false);
+  let routeListRevision = $state(0);
+  import { loadUserEndpoints } from '$lib/features/endpoints/library';
+  let endpointTags = $state<string[]>([]);
   import { Choice } from '$lib/components/ui/choice';
   import { store } from '$lib/services/store.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { openExternalUrl as openLink } from '$lib/services/platform';
-  import { AlertTriangle, Database, ExternalLink, LayoutGrid, List, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
+  import { AlertTriangle, Database, ExternalLink, LayoutGrid, List, Plus, RefreshCw, Trash2 } from '@lucide/svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { Badge } from '$lib/components/ui/badge';
@@ -36,18 +45,14 @@
   import { getAppErrorMessage } from '$lib/services/core';
   import type { CommonRuleAction, CommonRuleInjectionStatus, RuleSetProfile, RuleSetSummary, ZeroRule, ZeroRuleType } from '$lib/types/domain';
 
-  const RULE_TYPES: { value: ZeroRuleType; label: string; placeholder: string }[] = [
-    { value: 'domain_exact', label: '精确域名', placeholder: 'api.example.com' },
-    { value: 'domain_suffix', label: '域名后缀', placeholder: 'example.com' },
-    { value: 'domain_keyword', label: '域名关键词', placeholder: 'special' },
-    { value: 'ipv4_cidr', label: 'IPv4 CIDR', placeholder: '10.0.0.0/8' },
-    { value: 'ipv6_cidr', label: 'IPv6 CIDR', placeholder: 'fd00::/8' },
-  ];
+  import {RULE_MATCH_TYPES as RULE_TYPES} from '$lib/constants/rule-match-types';
   const VIEW_MODE_KEY = 'znet-rules-view-mode';
   const MAX_VISUAL_EDIT_RULES = 1000;
   type ViewMode = 'card' | 'list';
 
   let items = $state<RuleSetSummary[]>([]);
+  const assetItems=$derived(items.filter(item=>item.builtIn || item.source || typeof item.commonBinding?.action!=='object'));
+
   let loading = $state(true);
   let saving = $state(false);
   let updatingId = $state<string | null>(null);
@@ -77,9 +82,9 @@
   let builtinDetails = $state<RuleSetSummary | null>(null);
   let builtinDetailsError = $state('');
 
-  const sourceCount = $derived(items.filter((item) => item.source).length);
-  const readyCount = $derived(items.filter((item) => item.artifact).length);
-  const busy = $derived(saving || updatingId !== null || updatingAll || updatingBuiltins || deletingId !== null || commonSaving || bindingId !== null || loadingDetailId !== null);
+  const sourceCount = $derived(assetItems.filter((item) => item.source).length);
+  const readyCount = $derived(assetItems.filter((item) => item.artifact).length);
+  const busy = $derived(routeBusy || saving || updatingId !== null || updatingAll || updatingBuiltins || deletingId !== null || commonSaving || bindingId !== null || loadingDetailId !== null);
   const canSave = $derived(
     !busy
       && name.trim().length > 0
@@ -116,6 +121,7 @@
         getCommonRuleInjectionStatus(),
         getProfileSettings().catch(() => null),
       ]);
+      endpointTags = (await loadUserEndpoints().catch(() => ({endpoints:[]}))).endpoints.filter(e => e.directions?.outbound !== false).map(e => e.tag);
       items = nextItems;
       commonStatus = nextStatus;
       profileSnapshot = profile;
@@ -128,7 +134,7 @@
   }
 
   function commonStatusCopy() {
-    if (!commonStatus?.enabled) return '默认关闭，不改动当前运行配置';
+    if (!commonStatus?.enabled) return '未启用公共规则';
     if (commonStatus.effective) return `已注入 ${commonStatus.injectedCount} 个公共规则集`;
     return commonStatus.reason ?? '当前未生效';
   }
@@ -160,6 +166,7 @@
     try {
       const updated = await setCommonRuleBinding({
         ruleSetId: item.id,
+        profileId: item.commonBinding?.profileId,
         enabled: patch.enabled ?? current.enabled,
         action: patch.action ?? current.action,
         order: Number.isFinite(requestedOrder) ? Math.max(0, Math.trunc(requestedOrder)) : current.order,
@@ -170,6 +177,7 @@
       commonStatus = await getCommonRuleInjectionStatus();
     } catch (cause) {
       pageError = getAppErrorMessage(cause, '更新公共规则绑定失败，已保留原运行配置');
+      routeListRevision++;
     } finally {
       bindingId = null;
     }
@@ -218,6 +226,9 @@
     if (item.editableRuleCount > MAX_VISUAL_EDIT_RULES) {
       pageError = `“${item.name}”包含 ${item.editableRuleCount} 条规则，不能载入可视化编辑器；请拆分为小型覆盖规则集。`;
       return;
+    }
+    if (!item.source && typeof item.commonBinding?.action === 'object') {
+      if (await routeEditor?.edit(item)) return;
     }
     loadingDetailId = item.id;
     pageError = '';
@@ -422,12 +433,11 @@
 <div class="desk-card rules-root animate-fade-in">
   <div class="panel-header">
     <div class="panel-title-group">
-      <span class="panel-title">规则集</span>
-      <span class="panel-subtitle">统一管理路由与 DNS 分流使用的规则集</span>
+      <SegmentedControl.Root value={section} onValueChange={value=>{section=value as 'routes'|'sets';store.rulesSection=section;}} disabled={busy} aria-label="规则视图"><SegmentedControl.Item value="sets">规则集</SegmentedControl.Item><SegmentedControl.Item value="routes">路由规则</SegmentedControl.Item></SegmentedControl.Root>
     </div>
 
     <div class="header-actions">
-      <Button variant="outline" size="sm" onclick={() => store.openSettings('dns')}>DNS 分流</Button>
+      {#if section==='sets'}<Button variant="outline" size="sm" onclick={() => store.openSettings('dns')}>DNS 分流</Button>
       <SegmentedControl.Root
         value={viewMode}
         onValueChange={(value) => setViewMode(value as ViewMode)}
@@ -462,35 +472,25 @@
           <span>{updatingBuiltins ? '更新中...' : '更新内置'}</span>
         </Button>
       {/if}
+      {/if}<EndpointRouteEditor showTrigger={section==='routes'} bind:this={routeEditor} bind:busy={routeBusy} disabled={busy} onChanged={() => load(false)} />
+      {#if section==='sets'}
       <Button size="sm" onclick={openNew} disabled={busy}>
         <Plus class="h-3.5 w-3.5" />
         <span>新建</span>
-      </Button>
+      </Button>{/if}
     </div>
   </div>
 
-  <div class="summary-strip">
-    <div class="summary-copy">
-      <ShieldCheck class="summary-icon h-4 w-4" />
-      <span>保存后生成并校验 ZRS 产物。</span>
-    </div>
-    {#if items.length > 0}
-      <div class="summary-counts">
-        <span>{items.length} 个规则集</span>
-        <span>·</span>
-        <span>{readyCount} 个产物就绪</span>
-        {#if sourceCount > 0}
-          <span>·</span>
-          <span>{sourceCount} 个外部来源</span>
-        {/if}
-      </div>
+  {#if section==='routes'}
+    {#if loading}<div class="panel-empty">加载中…</div>{:else if loadError}<div class="error-banner" role="alert">{loadError}</div>{:else}
+      {#if pageError}<div class="error-banner" role="alert">{pageError}</div>{/if}
+      {#key routeListRevision}<EndpointRouteList {items} {busy} onEdit={item=>void routeEditor?.edit(item)} onToggle={item=>void updateCommonBinding(item,{enabled:!item.commonBinding?.enabled})} onRemove={requestRemove}/>{/key}
     {/if}
-  </div>
-
+  {:else}
   <div class="common-injection-row">
     <div class="common-injection-copy">
-      <span class="common-injection-title">在规则模式下注入公共规则</span>
-      <span class="common-injection-hint">客户端全局设置。{commonStatusCopy()}。自定义公共规则优先于配置规则；内置公共规则开启追加后作为补充。修改不会写回订阅原配置。</span>
+      <span class="common-injection-title">公共规则</span>
+      <span class="common-injection-hint">{assetItems.length} 个规则集 · {readyCount} 个可用 · {commonStatusCopy()}</span>
     </div>
     <Button variant="outline" size="sm" onclick={restoreRuleSource} disabled={commonSaving || !isLocallyEdited(profileSnapshot, 'routing.injectCommonRules')}>恢复配置值</Button>
     <Switch
@@ -519,7 +519,7 @@
         <Button variant="outline" size="sm" onclick={() => load()}>重试</Button>
       </div>
     </div>
-  {:else if items.length === 0}
+  {:else if assetItems.length === 0}
     <div class="panel-empty">
       <div class="empty-stack">
         <Database class="empty-icon h-9 w-9" />
@@ -533,7 +533,7 @@
     </div>
   {:else}
     <div class="list-scroll" class:card-view={viewMode === 'card'}>
-      {#each items as item (item.id)}
+      {#each assetItems as item (item.id)}
         <div class="list-row">
           <button data-slot="surface-button"
             type="button"
@@ -545,15 +545,16 @@
             <div class="row-top">
               <span class="row-name">{item.name}</span>
               <Badge variant={item.artifact ? 'secondary' : 'outline'}>
-                {item.artifact ? 'ZRS 已就绪' : '待构建'}
+                {item.artifact ? '可用' : '待构建'}
               </Badge>
               <Badge variant="outline">{item.builtIn ? '内置' : item.source ? '外部来源' : '本地'}</Badge>
               {#if item.commonBinding?.enabled}
-                <Badge variant="secondary">公共规则</Badge>
+                <Badge variant="secondary">{typeof item.commonBinding.action === 'object' ? '端点路由' : '公共规则'}</Badge>
               {/if}
             </div>
 
             <div class="row-meta">
+              {#if typeof item.commonBinding?.action === 'object'}<span>{item.commonBinding.profileId ? '指定配置' : '全局'}</span><span>·</span>{/if}
               {#if item.builtIn}
                 <span>{item.artifact?.entryCount ?? 0} 条内置规则</span>
               {:else if item.source}
@@ -565,10 +566,6 @@
               {/if}
               <span>·</span>
               <span>{formatBytes(item.artifact?.fileSize)}</span>
-              {#if item.artifact}
-                <span>·</span>
-                <span class="mono">CRC32 {item.artifact.checksum.toString(16).padStart(8, '0')}</span>
-              {/if}
             </div>
 
             {#if item.source}
@@ -589,18 +586,18 @@
           </button>
 
           <div class="row-actions">
-            <div class="common-binding" title="仅在公共规则总开关开启且处于规则模式时生效">
+            <div class="common-binding" title={typeof item.commonBinding?.action === 'object' ? '规则模式下生效，不受公共规则注入开关控制' : '仅在公共规则总开关开启且处于规则模式时生效'}>
                 <Switch
                   size="sm"
                   checked={item.commonBinding?.enabled ?? false}
                   onCheckedChange={() => updateCommonBinding(item, { enabled: !(item.commonBinding?.enabled ?? false) })}
                   disabled={busy || !item.artifact}
-                  aria-label={`将 ${item.name} 用作公共规则`}
+                  aria-label={typeof item.commonBinding?.action === 'object' ? `启用 ${item.name}` : `将 ${item.name} 用作公共规则`}
                 />
                 <FieldSelect
                   class="w-[116px]"
-                  value={item.commonBinding?.action ?? 'final'}
-                  onValueChange={(value) => updateCommonBinding(item, { action: value as CommonRuleAction })}
+                  value={typeof item.commonBinding?.action === 'object' ? `endpoint:${item.commonBinding.action.endpoint}` : item.commonBinding?.action ?? 'final'}
+                  onValueChange={(value) => updateCommonBinding(item, { action: value.startsWith('endpoint:') ? {endpoint: value.slice(9)} : value as CommonRuleAction })}
                   disabled={busy || !item.commonBinding?.enabled}
                   aria-label="匹配动作"
                   options={[
@@ -608,6 +605,7 @@
                     { value: 'proxy', label: '代理' },
                     { value: 'direct', label: '直连' },
                     { value: 'reject', label: '拒绝' },
+                    ...endpointTags.map(tag => ({value: `endpoint:${tag}`, label: `端点 · ${tag}`})),
                   ]}
                 />
                 <Input
@@ -617,7 +615,7 @@
                   value={item.commonBinding?.order ?? items.indexOf(item) * 10}
                   onchange={(event) => updateCommonBinding(item, { order: Number(event.currentTarget.value) })}
                   disabled={busy || !item.commonBinding?.enabled}
-                  aria-label="公共规则顺序"
+                  aria-label={typeof item.commonBinding?.action === 'object' ? '路由规则顺序' : '公共规则顺序'}
                   title="数值越小越优先"
                 />
             </div>
@@ -656,6 +654,7 @@
         </div>
       {/each}
     </div>
+  {/if}
   {/if}
 </div>
 
@@ -894,8 +893,8 @@
 </DraggableModal>
 
 <DraggableModal
-  title="删除规则集"
-  description="此操作会删除管理记录和订阅关联；已发布的不可变 ZRS 文件会保留，以免影响仍在映射它的内核进程。"
+  title={typeof pendingDelete?.commonBinding?.action==='object'?'删除路由规则':'删除规则集'}
+  description={typeof pendingDelete?.commonBinding?.action==='object'?'删除后将停止使用此分流规则。':'删除此规则集及其订阅关联。'}
   open={pendingDelete !== null}
   onClose={cancelRemove}
   closeDisabled={deletingId !== null}
@@ -907,7 +906,7 @@
     </div>
     <div class="delete-confirmation-copy">
       <span class="delete-confirmation-title">确定删除“{pendingDelete?.name}”吗？</span>
-      <span>删除后，引用该规则集的配置可能无法继续正常工作。</span>
+      <span>{typeof pendingDelete?.commonBinding?.action==='object'?'仅删除此路由规则，端点配置将保留。':'删除后，引用该规则集的配置可能无法继续正常工作。'}</span>
     </div>
   </div>
 
@@ -943,47 +942,22 @@
     padding: 11px 14px 10px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    min-height: 54px;
   }
 
   .panel-title-group {
     min-width: 0;
     display: flex;
-    flex-direction: column;
+    align-items: center;
     gap: 2px;
   }
 
-  .panel-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--foreground);
-    letter-spacing: -0.01em;
-  }
-
-  .panel-subtitle {
-    font-size: 10.5px;
-    color: var(--muted-foreground);
-    opacity: 0.8;
-  }
 
   .header-actions,
-  .row-actions,
-  .summary-counts {
+  .row-actions {
     display: flex;
     align-items: center;
     gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .summary-strip {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 8px 14px;
-    border-bottom: 1px solid var(--border);
-    background: color-mix(in srgb, var(--accent) 45%, transparent);
-    color: var(--muted-foreground);
-    font-size: 10.5px;
     flex-shrink: 0;
   }
 
@@ -999,6 +973,7 @@
   }
 
   .common-injection-copy {
+    flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -1014,23 +989,6 @@
   .common-injection-hint {
     color: var(--muted-foreground);
     font-size: 10.5px;
-  }
-
-  .summary-copy {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }
-
-  :global(.summary-icon) {
-    color: var(--accent-foreground);
-    flex-shrink: 0;
-  }
-
-  .summary-counts {
-    font-family: var(--font-mono);
-    white-space: nowrap;
   }
 
   .error-banner {
@@ -1466,13 +1424,11 @@
   }
 
   @media (max-width: 700px) {
-    .panel-header,
-    .summary-strip {
+    .panel-header {
       align-items: flex-start;
       flex-direction: column;
+      min-height: 100px;
     }
-
-    .summary-counts { display: none; }
 
     .header-actions {
       width: 100%;

@@ -1,5 +1,6 @@
 import { productComposition } from '../../scripts/product-composition.mjs';
 import { defineConfig } from 'vite';
+import { realpathSync } from 'node:fs';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +26,6 @@ export default defineConfig({
     { find: '$lib/services/core', replacement: absolute('./config.ts') },
     { find: '$lib', replacement: absolute('../../src/lib') },
   ] },
-  server: { host: '127.0.0.1', port: 4177, strictPort: true },
+  server: { host: '127.0.0.1', port: 4177, strictPort: true, fs: { allow: [absolute('../../'), realpathSync(absolute('../../node_modules'))] } },
   build: { outDir: absolute('../../build/ui-controls'), emptyOutDir: true },
 });

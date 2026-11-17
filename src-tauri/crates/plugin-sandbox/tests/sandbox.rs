@@ -267,7 +267,11 @@ fn ordinary_invocation_can_use_permission_checked_typed_host_call() {
 #[test]
 fn scheduled_typed_host_call_carries_the_max_subscription_payload() {
     let source = "JSON.parse(hostSdkCall('request')).value.length";
-    let c = component(source);
+    // This exercises maximum payload delivery, not the small-script CPU limit.
+    // Parsing 5 MiB in a debug VM must not depend on a 100 ms host scheduling slot.
+    let mut declared = manifest(source);
+    declared.limits.timeout_ms = 2000;
+    let c = Component::load(&serde_json::to_vec(&declared).unwrap(), source).unwrap();
     let request = request();
     let dispatcher = Arc::new(
         move |lease: &znet_plugin_sandbox::policy::Lease, input: &str| {

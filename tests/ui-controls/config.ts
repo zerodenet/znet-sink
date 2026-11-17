@@ -12,15 +12,24 @@ let items: RuleSetSummary[] = names.map((name, index) => ({
 export const listRuleSets = async () => structuredClone(items);
 export const getCommonRuleInjectionStatus = async () => ({ enabled: true, effective: true, eligibleCount: 4, injectedCount: 4 });
 export const setCommonRuleInjectionEnabled = getCommonRuleInjectionStatus;
-export const setCommonRuleBinding = async ({ ruleSetId, ...commonBinding }: CommonRuleBindingInput) => {
+export const setCommonRuleBinding = async (input: CommonRuleBindingInput) => {
+  // Match the native IPC JSON boundary: Svelte proxies never enter the store.
+  const {ruleSetId,...commonBinding}=JSON.parse(JSON.stringify(input)) as CommonRuleBindingInput;
+  if (new URLSearchParams(location.search).has('route-toggle-fails')) throw new Error('路由更新被拒绝');
   const item = items.find((item) => item.id === ruleSetId)!;
   item.commonBinding = commonBinding;
   return structuredClone(item);
 };
-export const getRuleSet = async () => { throw new Error('Full rule content must not be loaded by this suite'); };
+const localDetails = new Map<string, unknown>();
+export const getRuleSet = async (id: string) => {const detail=localDetails.get(id); if (detail) return structuredClone({...detail as object,...items.find(i=>i.id===id)}); throw new Error('Full rule content must not be loaded by this suite'); };
 export const removeRuleSet = async (id: string) => { items = items.filter((item) => item.id !== id); };
-export const upsertRuleSet = async (input: RuleSetUpsert) => {
+export const upsertRuleSet = async (value: RuleSetUpsert) => {
+  const input=JSON.parse(JSON.stringify(value)) as RuleSetUpsert;
+  if (new URLSearchParams(location.search).has('route-save-fails')) throw new Error('端点路由与提前绕过冲突');
   window.dispatchEvent(new CustomEvent('fixture-save', { detail: input }));
+  const item = {id:input.id ?? 'created-rule', name:input.name, enabled:true, commonBinding:input.commonBinding, builtIn:false, editableRuleCount:input.semanticIr?.rules.length ?? 0,sourceState:{},updatedAtUnixMs:1};
+  items = [...items.filter(i=>i.id!==item.id),item];
+  const detail={...item,semanticIr:input.semanticIr};localDetails.set(item.id,detail);return detail;
 };
 export const updateAllRuleSets = async () => ({ total: 4, updated: 4, unchanged: 0, failed: 0 });
 export const updateBuiltinRuleSets = updateAllRuleSets;
@@ -212,7 +221,7 @@ export const getConfigProxyNodes = async () => {
   const params = new URLSearchParams(location.search);
   if (params.get('panel') !== 'dns' || params.get('mode') === 'missing-target') return [];
   if (params.get('mode') === 'target-read-failure') throw new Error('Cannot read active config');
-  return [{ tag: 'wg-a', protocol: 'wireguard', udp: true }, { tag: 'node-a', protocol: 'socks5' }];
+  return [{ tag: 'wg-a', protocol: 'wireguard', udp: true }, { tag: 'node-a', protocol: 'socks5' }, ...(params.has('endpoint-dns-source')?[{tag:'Starters',protocol:'wireguard',udp:true}]:[])];
 };
 export const guiInspectDnsEffectiveConfig = async () => { throw new Error('No kernel in UI fixture'); };
 export const getGuiZeroCapabilities = async () => isCapabilitiesPanel() ? capabilityFixture() : ({ available: false, globalLimitations: [] });
@@ -297,6 +306,8 @@ export const getProfileSettings = async () => {
   if (new URLSearchParams(location.search).has('config-unavailable')) throw new Error('当前配置不可用');
   const defaults = await getAppConfig();
   const settings = JSON.parse(JSON.stringify(defaults));
+  const endpointDnsMode = new URLSearchParams(location.search).get('endpoint-dns-source');
+  if (endpointDnsMode) settings.userEndpoints=[{tag:'Starters',enabled:endpointDnsMode!=='disabled',directions:{inbound:false,outbound:true},protocol:{type:'wireguard'},dns:{servers:['192.168.1.180'],search_domains:[],use_as_default:endpointDnsMode!=='available'}}];
   const mode = new URLSearchParams(location.search).get('mode');
   if (mode === 'precedence') settings.localProxy = {host:'127.0.0.2',port:7891,bypass:[]};
   for (const [key,value] of Object.entries(localFieldEdits)) {
@@ -304,7 +315,8 @@ export const getProfileSettings = async () => {
     if (field) {settings[section] ??= {}; settings[section][field] = value;}
     else settings[section] = value;
   }
-  return {profileId:'fixture-profile',settings,editedFields:Object.keys(localFieldEdits)};
+  const endpointDnsServers = endpointDnsMode && endpointDnsMode!=='disabled' ? [{id:'client-endpoint-dns-fixture-0',endpoint:'Starters',server:{type:'udp',host:'192.168.1.180',port:53,detour:'Starters'},isDefault:endpointDnsMode!=='available'}] : [];
+  return {profileId:'fixture-profile',settings,endpointDnsServers,editedFields:Object.keys(localFieldEdits)};
 };
 
 export const getClientSettings = async () => (await getProfileSettings()).settings;

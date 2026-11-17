@@ -21,6 +21,7 @@ class AppStateStore {
   uiMode = $state<UIMode>('lite');
   isSwitchingUiMode = $state(false);
   activeTab = $state('overview');
+  rulesSection = $state<'routes' | 'sets'>('sets');
   settingsSection = $state<SettingsSection>('general');
   private returnLocation: { tab: string; section: SettingsSection } | null = null;
   selectedNodeId = $state('node-1');
@@ -118,6 +119,11 @@ class AppStateStore {
   openSettings(section: SettingsSection = 'core') {
     this.openTab('settings');
     this.settingsSection = section;
+  }
+
+  openRuleSets() {
+    this.rulesSection = 'sets';
+    this.openTab('rules');
   }
 
   openTab(tab: string) {

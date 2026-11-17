@@ -188,6 +188,7 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         app_config_commands::app_config_export_kernel_settings,
         app_config_commands::app_config_import_kernel_settings,
         app_update_commands::app_check_release,
+        app_update_commands::app_check_update,
         app_update_commands::download::app_download_update,
         app_update_commands::download::app_install_update,
         proxy_config_commands::proxy_config_list,

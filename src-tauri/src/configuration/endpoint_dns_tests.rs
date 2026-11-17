@@ -14,6 +14,71 @@ fn base() -> Value {
 }
 
 #[test]
+fn endpoint_dns_settings_projection_matches_composition_without_copying_secrets_or_base_settings() {
+    let original = base();
+    let settings = json!({"enabled":true,"config":original["runtime"]["dns"],"dnsHijack":true});
+    let row = endpoint();
+    let mut effective = original.clone();
+    apply(&mut effective, &[row.clone()]).unwrap();
+    let entries = summary(&settings, &[row.clone()]).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["isDefault"], true);
+    for entry in &entries {
+        assert_eq!(
+            entry["server"],
+            effective["runtime"]["dns"]["servers"][entry["id"].as_str().unwrap()]
+        );
+        assert_eq!(entry["endpoint"], "home");
+        assert!(entry.get("protocol").is_none());
+    }
+    assert_eq!(settings["config"], original["runtime"]["dns"]);
+    let mut non_default = row.clone();
+    non_default["dns"]["use_as_default"] = json!(false);
+    assert!(summary(&settings, &[non_default.clone()])
+        .unwrap()
+        .iter()
+        .all(|entry| entry["isDefault"] == false));
+    assert!(summary(&json!({"enabled":false}), &[non_default])
+        .unwrap()
+        .is_empty());
+    let mut disabled = row;
+    disabled["enabled"] = json!(false);
+    assert!(summary(&settings, &[disabled]).unwrap().is_empty());
+}
+
+#[test]
+fn imported_dns_references_survive_recomposition_and_block_removal_until_reassigned() {
+    let mut row = endpoint();
+    row["dns"]["use_as_default"] = json!(false);
+    for policy in [false, true] {
+        let mut source = base();
+        let id = server_tag("home", 0);
+        if policy {
+            source["runtime"]["dns"]["policy"]["direct_server"] = json!(id);
+        } else {
+            source["runtime"]["dns"]["dispatch"][0]["server"] = json!(id);
+        }
+        let mut effective = source.clone();
+        apply(&mut effective, &[row.clone()]).unwrap();
+        assert_eq!(
+            effective["runtime"]["dns"]["servers"][&id]["host"],
+            "10.66.0.1"
+        );
+        assert!(apply(&mut source.clone(), &[]).is_err());
+        let mut disabled = row.clone();
+        disabled["enabled"] = json!(false);
+        assert!(apply(&mut source.clone(), &[disabled]).is_err());
+        // Broken legacy references must remain readable so settings can repair them.
+        assert!(summary(
+            &json!({"enabled":true,"config":source["runtime"]["dns"]}),
+            &[]
+        )
+        .unwrap()
+        .is_empty());
+    }
+}
+
+#[test]
 fn imported_dns_applies_servers_and_fallbacks_preserving_original_rules_and_settings() {
     let mut config = base();
     let original = config.clone();

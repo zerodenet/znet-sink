@@ -25,13 +25,13 @@ async function fixture(overrides = {}) {
   const context = createContext({ $state: (value) => value, Error, Date, setTimeout, clearTimeout, setInterval, clearInterval });
   const modules = {
     '@tauri-apps/plugin-updater': {
-      check: async () => { calls.check++; return overrides.check ? overrides.check() : update; },
       Update: class { constructor() { return update; } },
     },
     '@tauri-apps/api/app': { getVersion: async () => '1.0.0' },
      '@tauri-apps/api/core': {
       Channel: class {},
       invoke: async (command, args) => {
+        if (command === 'app_check_update') { calls.check++; return overrides.check ? overrides.check() : {}; }
         if (command === 'app_download_update') { calls.download++; await overrides.download?.(args.onEvent); return; }
         if (command === 'app_install_update') { calls.install++; await overrides.install?.(); return; }
         calls.select++; return overrides.select ? overrides.select() : {};

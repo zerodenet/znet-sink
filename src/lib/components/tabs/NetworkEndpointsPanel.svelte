@@ -9,6 +9,7 @@
   import { catalogSupported } from '$lib/features/endpoints/policy';
   import { getAppErrorMessage, getClientCoreSnapshot } from '$lib/services/core';
   import type { ClientCoreSnapshot } from '$lib/types/gui-api';
+  import EndpointRouteEditor from './EndpointRouteEditor.svelte';
   import EndpointCard from './EndpointCard.svelte';
   import EndpointEditor from './EndpointEditor.svelte';
   import type { UserEndpoint } from '$lib/features/endpoints/library';
@@ -112,6 +113,7 @@
         <header><div class="configured-identity"><Network size={20}/><div><h3>{row.tag}</h3><span>{row.protocol.type}</span></div></div><div class="configured-tools"><span title="用户创建，自动加入所有配置">用户</span><details>
           <summary aria-label={`${row.tag} 更多操作`} title="更多操作"><MoreHorizontal size={18}/></summary>
           <div class="configured-menu">
+            {#if row.directions?.outbound!==false}<EndpointRouteEditor endpoint={row.tag} manageTrigger disabled={userBusy || !!view.busy}/>{/if}
             <Button variant="ghost" size="sm" disabled={userBusy || !!view.busy} onclick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void editor?.edit(row.tag); }}><Pencil size={14}/>编辑端点</Button>
             <Button variant="ghost" size="sm" disabled={userBusy || !!view.busy} onclick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void editor?.remove(row.tag); }}><Trash2 size={14}/>删除端点</Button>
           </div></details></div></header>

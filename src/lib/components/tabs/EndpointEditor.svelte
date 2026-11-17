@@ -21,6 +21,7 @@
   let deleteOpen = $state(false);
   let creationMode = $state<'manual' | 'file' | 'paste'>('manual');
   let attempted = $state(false);
+  let errorElement = $state<HTMLParagraphElement>();
   let returnFocus: HTMLElement | null = null;
   function restoreFocus(event: Event) {
     if (returnFocus?.isConnected) { event.preventDefault(); returnFocus.focus(); }
@@ -100,7 +101,7 @@
       if (!alive) return;
       library = next; onChange(next.endpoints); draft = null; deleting = null; editorOpen = false; deleteOpen = false;
       notice = '已保存；内核运行时已应用，未运行时将在下次启动生效。'; onSaved();
-    } catch (e) { if (alive) error = getAppErrorMessage(e, '用户端点保存失败，请刷新后核对实际状态'); }
+    } catch (e) { if (alive) { error = getAppErrorMessage(e, '用户端点保存失败，请刷新后核对实际状态'); await tick(); errorElement?.focus({preventScroll:true}); } }
     finally { if (alive) busy = false; }
   }
 </script>
@@ -112,14 +113,13 @@
   <Dialog.Content class="sm:max-w-[560px]" showCloseButton={!busy} onCloseAutoFocus={restoreFocus} onEscapeKeydown={event => { if (busy) event.preventDefault(); }} onInteractOutside={event => { if (busy) event.preventDefault(); }}>
     <Dialog.Header>
       <Dialog.Title>{originalTag === null ? '创建端点' : '编辑端点'}</Dialog.Title>
-      <Dialog.Description>自动加入所有配置，切换配置后仍保留。文件和粘贴配置都会先解析预览，再确认创建。</Dialog.Description>
+      <Dialog.Description>所有配置共用此端点。</Dialog.Description>
       {#if originalTag === null}<SegmentedControl.Root value={creationMode} onValueChange={value => creationMode = value as typeof creationMode} disabled={busy || disabled} aria-label="创建端点方式"><SegmentedControl.Item value="manual">手动填写</SegmentedControl.Item><SegmentedControl.Item value="file" disabled={!library?.protocols.some(protocol => protocol.type === 'wireguard')}>导入文件</SegmentedControl.Item><SegmentedControl.Item value="paste" disabled={!library?.protocols.some(protocol => protocol.type === 'wireguard')}>粘贴配置</SegmentedControl.Item></SegmentedControl.Root>{/if}
     </Dialog.Header>
     {#if originalTag === null && creationMode !== 'manual' && library}
       {#key creationMode}<EndpointImportDialog bind:busy {library} mode={creationMode} onSaved={imported} onCancel={() => closeEditor(false)} />{/key}
     {:else}
     <Dialog.Body>
-      {#if error}<p role="alert" class="error">{error}</p>{/if}
       {#if draft}
         <form id="endpoint-editor-form" novalidate onsubmit={event => { event.preventDefault(); void commit(); }}>
           <fieldset disabled={busy || disabled} class="grid min-w-0 gap-4 border-0 p-0">
@@ -141,9 +141,12 @@
         </form>
       {:else if busy}<p role="status">正在读取端点…</p>{/if}
     </Dialog.Body>
-    <Dialog.Footer>
+    <Dialog.Footer class="flex-col sm:flex-col">
+      {#if error}<p bind:this={errorElement} role="alert" tabindex="-1" class="error save-error">{error}</p>{/if}
+      <div class="flex justify-end gap-2">
       <Button type="button" variant="outline" disabled={busy} onclick={() => closeEditor(false)}>取消</Button>
       <Button type="submit" form="endpoint-editor-form" disabled={busy || disabled || !draft}>{busy ? '正在保存…' : '保存并应用'}</Button>
+      </div>
     </Dialog.Footer>
     {/if}
   </Dialog.Content>
@@ -157,5 +160,6 @@
 </Dialog.Root>
 <style>
   .error { color:var(--destructive); font-size:12px; margin:0 0 12px; }
+  .save-error {margin:0;max-height:20vh;overflow-y:auto;overflow-wrap:anywhere;outline:none;}
   .notice { color:var(--muted-foreground); font-size:12px; margin:10px 0; }
 </style>

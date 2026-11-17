@@ -33,3 +33,15 @@ fn incomplete_and_capability_only_responses_are_not_running_state() {
             .enabled
     );
 }
+
+#[test]
+fn omitted_empty_tun_routes_follow_the_kernel_wire_contract() {
+    let status = decode_tun_status(Ok(json!({"running":true}))).unwrap();
+    assert_eq!(status.include_cidrs, Some(vec![]));
+    assert_eq!(status.exclude_cidrs, Some(vec![]));
+    let status = decode_tun_status(Ok(
+        json!({"running":true,"includeCidrs":["10.0.0.0/8"],"exclude_cidrs":[]}),
+    ))
+    .unwrap();
+    assert_eq!(status.include_cidrs, Some(vec!["10.0.0.0/8".into()]));
+}

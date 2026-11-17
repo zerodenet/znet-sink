@@ -22,6 +22,27 @@ pub(crate) fn current(state: &AppState) -> AppResult<(AppConfig, Value)> {
     super::local_edits::resolve(&app, profile.as_ref().map(|p| p.id.as_str()), &base)
 }
 
+/// Use the actual publication composer, including local edits, bypass and
+/// endpoint DNS. Capture must never authorize an earlier partial DNS view.
+pub(crate) fn composed_current(state: &AppState) -> AppResult<Value> {
+    let app = lock(state.app_config(), "app_config")?.clone();
+    let profile = lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.active)
+        .cloned();
+    let base = profile
+        .as_ref()
+        .and_then(|profile| profile.content.clone())
+        .unwrap_or_else(|| json!({}));
+    Ok(crate::services::rule_overlay::compose_candidate_with_app(
+        state,
+        &base,
+        profile.as_ref().map(|profile| profile.id.as_str()),
+        &app,
+    )?
+    .config)
+}
+
 /// A hot config apply cannot silently retain an old command-owned TUN plan.
 /// Check before publishing either the new runtime config or source profile.
 pub(crate) async fn require_capture_compatible(

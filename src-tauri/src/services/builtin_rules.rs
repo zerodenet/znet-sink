@@ -110,6 +110,7 @@ fn install_defaults_in(base: &Path, items: &mut Vec<RuleSetProfile>) -> AppResul
                 .and_then(|profile| profile.common_binding.clone())
                 .or_else(|| {
                     Some(CommonRuleBinding {
+                        profile_id: None,
                         enabled: true,
                         action: asset.default_action.clone(),
                         order: asset.default_order,
@@ -242,6 +243,7 @@ pub(crate) async fn update_all(state: &AppState) -> AppResult<RuleSetSyncAllOutc
                 .and_then(|profile| profile.common_binding.clone())
                 .or_else(|| {
                     Some(CommonRuleBinding {
+                        profile_id: None,
                         enabled: true,
                         action: asset.default_action.clone(),
                         order: asset.default_order,

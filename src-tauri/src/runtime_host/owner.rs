@@ -109,6 +109,18 @@ impl Host {
             .map(|process| process.status.clone())
             .map_err(|_| AppError::internal("managed process state lock poisoned"))
     }
+    /// Never wait on a lifecycle lock or IPC from an outbound request.
+    pub(crate) fn network_proxy_ready(&self) -> bool {
+        let Ok(mut process) = self.process.try_lock() else {
+            return false;
+        };
+        process.status.state == CoreProcessState::Running
+            && process.endpoint.is_some()
+            && process
+                .child
+                .as_mut()
+                .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+    }
     pub(crate) fn try_process_status(&self) -> Option<CoreProcessStatus> {
         self.process
             .try_lock()

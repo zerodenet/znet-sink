@@ -202,9 +202,11 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
         managed_by_subscription_id: previous_profile
             .as_ref()
             .and_then(|item| item.managed_by_subscription_id.clone()),
-        common_binding: previous_profile
-            .as_ref()
-            .and_then(|item| item.common_binding.clone()),
+        common_binding: input.common_binding.or_else(|| {
+            previous_profile
+                .as_ref()
+                .and_then(|item| item.common_binding.clone())
+        }),
         semantic_ir: stored_semantic_ir,
         source: source.clone(),
         source_state,
@@ -220,14 +222,13 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
         last_error: None,
     };
 
-    let mut items = lock(state.rule_sets(), "rule_set")?;
-    let mut next = items.clone();
+    let previous = lock(state.rule_sets(), "rule_set")?.clone();
+    let mut next = previous.clone();
     match next.iter_mut().find(|item| item.id == id) {
         Some(existing) => *existing = profile.clone(),
         None => next.push(profile.clone()),
     }
-    domain_store::save_rule_sets(&next)?;
-    *items = next;
+    rule_overlay::publish_profiles(state.inner(), &previous, next).await?;
     Ok(profile)
 }
 
@@ -707,10 +708,10 @@ pub fn kernel_payloads(state: State<'_, AppState>) -> AppResult<Vec<RuleSetKerne
         .collect()
 }
 
-pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
+pub async fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let id = normalize_required(id, "id")?;
     let _in_flight = begin_in_flight(state.rule_set_updates(), "rule_set", &id)?;
-    let mut items = lock(state.rule_sets(), "rule_set")?;
+    let items = lock(state.rule_sets(), "rule_set")?.clone();
     if items
         .iter()
         .any(|item| item.id == id && is_subscription_managed_rule_set(item))
@@ -731,8 +732,7 @@ pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
         return Err(AppError::not_found("rule_set", id));
     }
     // Published generations are intentionally retained: a running kernel may still mmap them.
-    domain_store::save_rule_sets(&next)?;
-    *items = next;
+    rule_overlay::publish_profiles(state.inner(), &items, next).await?;
     Ok(())
 }
 
