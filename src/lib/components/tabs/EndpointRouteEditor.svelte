@@ -11,7 +11,7 @@
   import { endpointGateway } from '$lib/features/endpoints/client';
   import { Route } from '@lucide/svelte';
   import { success as toastSuccess } from '$lib/services/toast.svelte';
-  import { endpointRuleLines } from '$lib/features/routing/endpoint-rules';
+  import { endpointRuleLines } from '$lib/features/endpoints/route-rules';
   import { getAppErrorMessage, getProfileSettings } from '$lib/services/core';
   import { getRuleSet, listRuleSets, upsertRuleSet, setCommonRuleBinding, removeRuleSet } from '$lib/services/config';
   import type { RuleSetSummary, ZeroRuleType } from '$lib/types/domain';
