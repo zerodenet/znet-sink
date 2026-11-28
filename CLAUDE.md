@@ -1,7 +1,6 @@
 # CLAUDE.md
 
-@.engineering/architecture.md
-@.engineering/verification.md
+Use the [task-to-standard map in AGENTS.md](AGENTS.md) to decide which standards to read. Open only the matches; do not load the linked standards as a bundle.
 
 The project notes below are reference material, not a second policy.
 
