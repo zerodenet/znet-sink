@@ -1,5 +1,15 @@
 # AGENTS.md
 
+## v0.0.3 engineering rules
+
+- Base desktop refactor work on `develop`. Keep v0.0.2 RC work fixes-only. Preserve existing mobile work; do not add mobile scope without approval.
+- Keep subscription network data separate from local UI preferences. Lite and Pro share application commands and runtime state; changing layout must not change proxy state.
+- Separate saving a candidate from applying it and receiving runtime confirmation. Do not report an unconfirmed result as success or silently replay it.
+- Use existing verification entry points. Run `pnpm verify` for cross-layer changes when available and `pnpm test:ui-browser` for UI changes; distinguish unrun checks from passed checks. Add a behavioral regression for bug fixes and provide runtime evidence for interaction changes.
+- Do not weaken tests or CI to make a change pass. When an acceptance contract changes, describe why and retain evidence that the relevant failure is still caught.
+
+See the [v0.0.3 engineering guidance](docs/engineering/v0.0.3-guidance.md) for scope, review and verification details.
+
 ## Project Overview
 - Tauri 2 desktop app with SvelteKit 2 frontend
 - TypeScript 6 + Tailwind CSS 4 + shadcn-svelte components
