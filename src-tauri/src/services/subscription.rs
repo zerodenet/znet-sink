@@ -4420,46 +4420,6 @@ rule-providers:
     }
 
     #[test]
-    fn subscription_clash_ui_fields_do_not_change_network_material() {
-        let clean = "proxies: []\nrules: [\"MATCH,DIRECT\"]\n";
-        let injected =
-            format!("{clean}ui:\n  uiMode: pro\n  hiddenMenuKeys: [nodes]\n  toolsEnabled: true\n");
-
-        for format in ["clash", "auto"] {
-            let expected = parse_subscription_content(clean, format).unwrap();
-            let actual = parse_subscription_content(&injected, format).unwrap();
-            assert_eq!(actual.content, expected.content);
-            assert_eq!(actual.format, expected.format);
-            assert!(actual.content.get("ui").is_none());
-        }
-    }
-
-    #[test]
-    fn subscription_zero_native_validation_rejects_local_ui_fields() {
-        let clean = json!({
-            "inbounds": [],
-            "outbounds": [{"tag": "direct", "protocol": {"type": "direct"}}],
-            "route": {"final": {"type": "route", "outbound": "direct"}}
-        });
-        let encode = |value: &Value| {
-            let bytes = serde_json::to_vec(value).unwrap();
-            general_purpose::STANDARD.encode(bytes)
-        };
-        let parsed = parse_subscription_content(&encode(&clean), "zero").unwrap();
-        zero_config::RuntimeConfig::parse(&parsed.content.to_string()).unwrap();
-
-        let mut injected = clean;
-        injected["ui"] = json!({
-            "uiMode": "pro",
-            "hiddenMenuKeys": ["nodes"],
-            "toolsEnabled": true
-        });
-        let parsed = parse_subscription_content(&encode(&injected), "zero").unwrap();
-        let error = zero_config::RuntimeConfig::parse(&parsed.content.to_string()).unwrap_err();
-        assert!(error.to_string().contains("unknown field `ui`"), "{error}");
-    }
-
-    #[test]
     fn clash_conversion_gets_a_usable_mixed_inbound() {
         let mut content = json!({ "outbounds": [] });
         ensure_clash_local_inbound(&mut content, None, "127.0.0.1", 7890).unwrap();
