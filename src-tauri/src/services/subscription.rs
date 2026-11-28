@@ -4422,9 +4422,8 @@ rule-providers:
     #[test]
     fn subscription_clash_ui_fields_do_not_change_network_material() {
         let clean = "proxies: []\nrules: [\"MATCH,DIRECT\"]\n";
-        let injected = format!(
-            "{clean}ui:\n  uiMode: pro\n  hiddenMenuKeys: [nodes]\n  toolsEnabled: true\n"
-        );
+        let injected =
+            format!("{clean}ui:\n  uiMode: pro\n  hiddenMenuKeys: [nodes]\n  toolsEnabled: true\n");
 
         for format in ["clash", "auto"] {
             let expected = parse_subscription_content(clean, format).unwrap();
