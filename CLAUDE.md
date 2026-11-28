@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Use the [task-to-standard map in AGENTS.md](AGENTS.md) to decide which standards to read. Open only the matches; do not load the linked standards as a bundle.
+
+The project notes below are reference material, not a second policy.
 
 ## Build & Develop Commands
 
@@ -94,7 +96,7 @@ Key services: `core_process` (spawn/stop the kernel binary, also `kill_external`
 
 ### Lite/Pro Mode & Interaction Modes
 
-`AppUiConfig` holds `theme` and `ui_mode`. The frontend store syncs from the backend on startup (`loadFromBackend()`), falling back to localStorage; changes push back via `updateAppConfig`. The Rust `interaction_mode`/`proxy_mode` services gate pro-only operations and return the `mode_restricted` error code when a lite user hits a pro action — the frontend surfaces this with a toast (`handleAppError`). Menu/operation visibility comes from `gui_interaction_surface_snapshot` and `app_config_get().ui.hiddenMenuKeys`.
+`AppUiConfig` stores local interface preferences. Lite and Pro share application commands and runtime state. The interaction surface distinguishes menu visibility from whether an action can run; permissions and runtime prerequisites apply in either presentation.
 
 ### Startup Flow
 
